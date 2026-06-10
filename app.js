@@ -80,19 +80,21 @@ async function callPepper(userMessage) {
 
   conversationHistory.push({ role: 'user', content: userMessage });
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
+  const messages = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    ...conversationHistory
+  ];
+
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true'
+      'Authorization': `Bearer ${apiKey}`
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
+      model: 'llama-3.3-70b-versatile',
       max_tokens: 1000,
-      system: SYSTEM_PROMPT,
-      messages: conversationHistory
+      messages: messages
     })
   });
 
@@ -102,7 +104,7 @@ async function callPepper(userMessage) {
   }
 
   const data = await response.json();
-  const text = data.content.map(b => b.text || '').join('');
+  const text = data.choices[0].message.content;
   conversationHistory.push({ role: 'assistant', content: text });
   return text;
 }
