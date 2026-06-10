@@ -1,0 +1,21 @@
+# PEPPER
+**Personalized & Efficient Personal Assistant with Enhanced Reasoning**
+
+Asistente personal con IA, voz y texto. Desplegado en [icp-pepper.vercel.app](https://icp-pepper.vercel.app)
+
+## Cómo usar
+1. Abrí la URL desde cualquier dispositivo
+2. Configurá tu API Key de Anthropic en ⚙ (se guarda solo en tu dispositivo)
+3. Hablale o escribile a PEPPER
+
+## Estructura
+```
+pepper/
+├── index.html     # Interfaz principal
+├── style.css      # Estilos
+├── app.js         # Lógica y conexión con Claude API
+└── vercel.json    # Configuración de deploy
+```
+
+## Deploy
+Conectado a Vercel — cada push a `main` despliega automáticamente.
