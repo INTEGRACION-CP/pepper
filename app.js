@@ -8,11 +8,12 @@ Tu personalidad:
 - Sos concisa: máximo 3-4 oraciones antes de una propuesta
 
 Tu flujo de trabajo:
-1. Recibís la necesidad del usuario
-2. La interpretás y comparás con mejores prácticas y benchmarks reales
-3. Si es una tarea concreta, generás una PROPUESTA estructurada
-4. Esperás el OK del usuario antes de continuar
-5. Si algo puede dañar a alguien, no avanzás y lo comunicás claramente
+1. Al iniciar, revisás la memoria disponible para recordar el contexto del usuario
+2. Recibís la necesidad del usuario
+3. La interpretás y comparás con mejores prácticas y benchmarks reales
+4. Si es una tarea concreta, generás una PROPUESTA estructurada
+5. Esperás el OK del usuario antes de continuar
+6. Si algo puede dañar a alguien, no avanzás y lo comunicás claramente
 
 Formato de propuesta — usalo cuando tengas un plan concreto:
 [PROPUESTA]
@@ -27,6 +28,8 @@ let conversationHistory = [];
 let attachedFile = null;
 let isListening = false;
 let recognition = null;
+let memoryData = { perfil: {}, proyectos: [], conversaciones: [] };
+let currentSessionMessages = [];
 
 const messagesEl = document.getElementById('messages');
 const inputEl = document.getElementById('user-input');
@@ -39,49 +42,129 @@ const btnSettings = document.getElementById('btn-settings');
 const modalSettings = document.getElementById('modal-settings');
 const modalClose = document.getElementById('modal-close');
 const apiKeyInput = document.getElementById('api-key-input');
+const ghTokenInput = document.getElementById('gh-token-input');
 const btnSaveKey = document.getElementById('btn-save-key');
 
-function getApiKey() {
-  return localStorage.getItem('pepper_api_key') || '';
-}
+function getApiKey() { return localStorage.getItem('pepper_api_key') || ''; }
+function getGhToken() { return localStorage.getItem('pepper_gh_token') || ''; }
+function getGhRepo() { return 'INTEGRACION-CP/pepper'; }
 
-function init() {
+async function init() {
   const key = getApiKey();
   if (key) {
     apiKeyInput.value = key;
+    if (ghTokenInput && getGhToken()) ghTokenInput.value = getGhToken();
+    await loadMemory();
     addWelcomeMessage();
   } else {
     addNoKeyNotice();
   }
 }
 
-function addWelcomeMessage() {
-  addMessage('pepper', 'Hola! Soy PEPPER. Contame qué necesitás resolver hoy y lo analizamos juntos.');
+// ── GitHub Storage ──────────────────────────────────────────────
+
+async function githubRequest(path, method = 'GET', body = null) {
+  const token = getGhToken();
+  if (!token) return null;
+  const url = `https://api.github.com/repos/${getGhRepo()}/contents/${path}`;
+  const headers = {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json',
+    'Accept': 'application/vnd.github+json'
+  };
+  const opts = { method, headers };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(url, opts);
+  if (!res.ok && res.status !== 404) return null;
+  if (res.status === 404) return null;
+  return res.json();
 }
 
-function addNoKeyNotice() {
-  const wrap = document.createElement('div');
-  wrap.className = 'msg pepper';
-  wrap.innerHTML = `
-    <div class="msg-av">P</div>
-    <div>
-      <div class="notice">
-        <i class="ti ti-key"></i>
-        <div>Para activarme necesitás configurar tu API Key de Anthropic.
-        Hacé clic en el ícono <strong>⚙</strong> arriba a la derecha y pegá tu clave.</div>
-      </div>
-    </div>`;
-  messagesEl.appendChild(wrap);
+async function loadMemory() {
+  try {
+    const file = await githubRequest('memory/memory.json');
+    if (file && file.content) {
+      const decoded = atob(file.content.replace(/\n/g, ''));
+      memoryData = JSON.parse(decoded);
+    }
+  } catch (e) {
+    memoryData = { perfil: {}, proyectos: [], conversaciones: [] };
+  }
 }
+
+async function saveMemory() {
+  try {
+    const token = getGhToken();
+    if (!token) return;
+    const content = btoa(unescape(encodeURIComponent(JSON.stringify(memoryData, null, 2))));
+    const existing = await githubRequest('memory/memory.json');
+    const body = {
+      message: `memoria: actualización ${new Date().toISOString().split('T')[0]}`,
+      content,
+      ...(existing ? { sha: existing.sha } : {})
+    };
+    await githubRequest('memory/memory.json', 'PUT', body);
+  } catch (e) {
+    console.error('Error guardando memoria:', e);
+  }
+}
+
+async function saveFile(path, contentStr, commitMsg) {
+  try {
+    const token = getGhToken();
+    if (!token) return false;
+    const content = btoa(unescape(encodeURIComponent(contentStr)));
+    const existing = await githubRequest(path);
+    const body = {
+      message: commitMsg || `pepper: guardar ${path}`,
+      content,
+      ...(existing ? { sha: existing.sha } : {})
+    };
+    const res = await githubRequest(path, 'PUT', body);
+    return !!res;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function saveConversation() {
+  if (currentSessionMessages.length === 0) return;
+  const date = new Date();
+  const dateStr = date.toISOString().split('T')[0];
+  const timeStr = date.toTimeString().split(' ')[0].replace(/:/g, '-');
+  const path = `conversaciones/${dateStr}/${timeStr}.json`;
+  const session = {
+    fecha: date.toISOString(),
+    mensajes: currentSessionMessages
+  };
+  await saveFile(path, JSON.stringify(session, null, 2), `conversación ${dateStr} ${timeStr}`);
+
+  // Actualizar memoria con resumen de la sesión
+  memoryData.conversaciones = memoryData.conversaciones || [];
+  memoryData.conversaciones.unshift({ fecha: date.toISOString(), mensajes: currentSessionMessages.length });
+  if (memoryData.conversaciones.length > 50) memoryData.conversaciones = memoryData.conversaciones.slice(0, 50);
+  await saveMemory();
+}
+
+function buildMemoryContext() {
+  if (!memoryData || Object.keys(memoryData.perfil || {}).length === 0) return '';
+  const proyectos = (memoryData.proyectos || []).map(p => `- ${p.nombre}: ${p.estado}`).join('\n');
+  return `\n\n[MEMORIA DE CONVERSACIONES ANTERIORES]\nProyectos conocidos:\n${proyectos || 'Ninguno aún'}\nPerfil: ${JSON.stringify(memoryData.perfil)}`;
+}
+
+// ── API Call ──────────────────────────────────────────────────
 
 async function callPepper(userMessage) {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error('NO_KEY');
 
   conversationHistory.push({ role: 'user', content: userMessage });
+  currentSessionMessages.push({ rol: 'usuario', mensaje: userMessage, hora: new Date().toISOString() });
+
+  const systemWithMemory = SYSTEM_PROMPT + buildMemoryContext();
 
   const messages = [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: systemWithMemory },
     ...conversationHistory
   ];
 
@@ -94,7 +177,7 @@ async function callPepper(userMessage) {
     body: JSON.stringify({
       model: 'llama-3.3-70b-versatile',
       max_tokens: 1000,
-      messages: messages
+      messages
     })
   });
 
@@ -106,8 +189,11 @@ async function callPepper(userMessage) {
   const data = await response.json();
   const text = data.choices[0].message.content;
   conversationHistory.push({ role: 'assistant', content: text });
+  currentSessionMessages.push({ rol: 'pepper', mensaje: text, hora: new Date().toISOString() });
   return text;
 }
+
+// ── UI ────────────────────────────────────────────────────────
 
 function parseResponse(text) {
   const propMatch = text.match(/\[PROPUESTA\]([\s\S]*?)\[\/PROPUESTA\]/);
@@ -126,32 +212,22 @@ function parseResponse(text) {
 function addMessage(role, text, proposal = null, fileName = null) {
   const wrap = document.createElement('div');
   wrap.className = `msg ${role}`;
-
   const av = document.createElement('div');
   av.className = 'msg-av';
   av.textContent = role === 'pepper' ? 'P' : 'Vos';
-
   const body = document.createElement('div');
   body.style.cssText = 'display:flex;flex-direction:column;min-width:0;';
-
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
   bubble.textContent = text;
-
   if (fileName) {
     const badge = document.createElement('div');
     badge.className = 'file-badge';
     badge.innerHTML = `<i class="ti ti-file"></i>${fileName}`;
     bubble.appendChild(badge);
   }
-
   body.appendChild(bubble);
-
-  if (proposal) {
-    const card = buildProposalCard(proposal);
-    body.appendChild(card);
-  }
-
+  if (proposal) body.appendChild(buildProposalCard(proposal));
   wrap.appendChild(av);
   wrap.appendChild(body);
   messagesEl.appendChild(wrap);
@@ -161,37 +237,28 @@ function addMessage(role, text, proposal = null, fileName = null) {
 function buildProposalCard(proposal) {
   const riskColor = proposal.riesgo.startsWith('bajo') ? '#1D9E75'
     : proposal.riesgo.startsWith('alto') ? '#E24B4A' : '#BA7517';
-
   const card = document.createElement('div');
   card.className = 'proposal-card';
-
   const title = document.createElement('div');
   title.className = 'proposal-title';
   title.innerHTML = `<i class="ti ti-checklist"></i>${proposal.titulo}`;
-
   const steps = document.createElement('div');
   steps.className = 'proposal-steps';
   steps.innerHTML = proposal.pasos.map((p, i) => `${i + 1}. ${p}`).join('<br>');
-
   const risk = document.createElement('div');
   risk.className = 'proposal-risk';
   risk.style.color = riskColor;
   risk.innerHTML = `<i class="ti ti-shield-check"></i>Riesgo: ${proposal.riesgo}`;
-
   const actions = document.createElement('div');
   actions.className = 'proposal-actions';
-
   const btnOk = document.createElement('button');
   btnOk.className = 'btn-ok';
   btnOk.textContent = 'OK — adelante';
-
   const btnNok = document.createElement('button');
   btnNok.className = 'btn-nok';
   btnNok.textContent = 'NO OK — buscar alternativa';
-
   btnOk.onclick = () => handleDecision('ok', proposal.titulo, actions);
   btnNok.onclick = () => handleDecision('nok', proposal.titulo, actions);
-
   actions.appendChild(btnOk);
   actions.appendChild(btnNok);
   card.appendChild(title);
@@ -210,22 +277,33 @@ function addTyping() {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-function removeTyping() {
-  document.getElementById('typing-indicator')?.remove();
+function removeTyping() { document.getElementById('typing-indicator')?.remove(); }
+
+function addWelcomeMessage() {
+  const proyectos = (memoryData.proyectos || []).filter(p => p.estado === 'activo');
+  let msg = 'Hola! Soy PEPPER. Contame qué necesitás resolver hoy y lo analizamos juntos.';
+  if (proyectos.length > 0) {
+    msg = `Hola de nuevo! Tengo en memoria ${proyectos.length} proyecto(s) activo(s): ${proyectos.map(p => p.nombre).join(', ')}. ¿Continuamos con alguno o arrancamos algo nuevo?`;
+  }
+  addMessage('pepper', msg);
+}
+
+function addNoKeyNotice() {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg pepper';
+  wrap.innerHTML = `<div class="msg-av">P</div><div><div class="notice"><i class="ti ti-key"></i><div>Para activarme necesitás configurar tu API Key de Groq y tu GitHub Token. Hacé clic en el ícono <strong>⚙</strong> arriba a la derecha.</div></div></div>`;
+  messagesEl.appendChild(wrap);
 }
 
 async function handleDecision(decision, titulo, actionsEl) {
   actionsEl.innerHTML = decision === 'ok'
     ? `<span style="color:#1D9E75;font-size:13px;display:flex;align-items:center;gap:5px"><i class="ti ti-check"></i>Aprobado</span>`
     : `<span style="color:#E24B4A;font-size:13px;display:flex;align-items:center;gap:5px"><i class="ti ti-x"></i>Buscando alternativa...</span>`;
-
   const msg = decision === 'ok'
     ? `OK, adelante con: ${titulo}`
     : `NO OK para: ${titulo}. Por favor buscá una alternativa diferente.`;
-
   addMessage('user', decision === 'ok' ? 'OK — adelante' : 'NO OK — buscá otra alternativa');
   addTyping();
-
   try {
     const reply = await callPepper(msg);
     removeTyping();
@@ -241,22 +319,14 @@ async function handleDecision(decision, titulo, actionsEl) {
 async function sendMessage() {
   const text = inputEl.value.trim();
   if (!text && !attachedFile) return;
-
-  const displayText = text || '';
   const fileName = attachedFile?.name || null;
-  addMessage('user', displayText, null, fileName);
-
-  const messageToSend = attachedFile
-    ? `${text}\n\n[El usuario adjuntó el archivo: ${attachedFile.name}]`
-    : text;
-
+  addMessage('user', text, null, fileName);
+  const messageToSend = attachedFile ? `${text}\n\n[Archivo adjunto: ${attachedFile.name}]` : text;
   inputEl.value = '';
   inputEl.style.height = 'auto';
   attachedFile = null;
   inputEl.placeholder = 'Contale a PEPPER qué necesitás resolver...';
-
   addTyping();
-
   try {
     const reply = await callPepper(messageToSend);
     removeTyping();
@@ -302,46 +372,41 @@ function startVoice() {
 
 // Events
 btnSend.addEventListener('click', sendMessage);
-
-btnVoice.addEventListener('click', () => {
-  isListening ? recognition?.stop() : startVoice();
-});
-
+btnVoice.addEventListener('click', () => { isListening ? recognition?.stop() : startVoice(); });
 fileInput.addEventListener('change', (e) => {
   attachedFile = e.target.files[0];
   if (attachedFile) inputEl.placeholder = `Archivo listo: ${attachedFile.name}`;
 });
-
 inputEl.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
 });
-
 inputEl.addEventListener('input', () => {
   inputEl.style.height = 'auto';
   inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';
 });
-
-btnClear.addEventListener('click', () => {
+btnClear.addEventListener('click', async () => {
+  await saveConversation();
   conversationHistory = [];
+  currentSessionMessages = [];
   messagesEl.innerHTML = '';
   addWelcomeMessage();
 });
-
 btnSettings.addEventListener('click', () => modalSettings.classList.remove('hidden'));
 modalClose.addEventListener('click', () => modalSettings.classList.add('hidden'));
 modalSettings.addEventListener('click', (e) => { if (e.target === modalSettings) modalSettings.classList.add('hidden'); });
-
 btnSaveKey.addEventListener('click', () => {
   const key = apiKeyInput.value.trim();
+  const ghToken = ghTokenInput ? ghTokenInput.value.trim() : '';
   if (key) {
     localStorage.setItem('pepper_api_key', key);
+    if (ghToken) localStorage.setItem('pepper_gh_token', ghToken);
     modalSettings.classList.add('hidden');
-    if (messagesEl.querySelector('.notice')) {
-      messagesEl.innerHTML = '';
-      addWelcomeMessage();
-    }
+    if (messagesEl.querySelector('.notice')) { messagesEl.innerHTML = ''; addWelcomeMessage(); }
   }
 });
+
+// Guardar conversación al cerrar
+window.addEventListener('beforeunload', () => { saveConversation(); });
 
 window.speechSynthesis?.getVoices();
 init();
