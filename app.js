@@ -8,7 +8,7 @@ Tu personalidad:
 - Sos concisa: máximo 3-4 oraciones antes de una propuesta
 
 Tu flujo de trabajo:
-1. Al iniciar, revisás la memoria disponible para recordar el contexto del usuario
+1. Al iniciar revisás la memoria disponible para recordar el contexto del usuario
 2. Recibís la necesidad del usuario
 3. La interpretás y comparás con mejores prácticas y benchmarks reales
 4. Si es una tarea concreta, generás una PROPUESTA estructurada
@@ -28,7 +28,6 @@ let conversationHistory = [];
 let attachedFile = null;
 let isListening = false;
 let recognition = null;
-let memoryData = { perfil: {}, proyectos: [], conversaciones: [] };
 let currentSessionMessages = [];
 
 const messagesEl = document.getElementById('messages');
@@ -42,117 +41,53 @@ const btnSettings = document.getElementById('btn-settings');
 const modalSettings = document.getElementById('modal-settings');
 const modalClose = document.getElementById('modal-close');
 const apiKeyInput = document.getElementById('api-key-input');
-const ghTokenInput = document.getElementById('gh-token-input');
 const btnSaveKey = document.getElementById('btn-save-key');
 
 function getApiKey() { return localStorage.getItem('pepper_api_key') || ''; }
-function getGhToken() { return localStorage.getItem('pepper_gh_token') || ''; }
-function getGhRepo() { return 'INTEGRACION-CP/pepper'; }
 
-async function init() {
-  const key = getApiKey();
-  if (key) {
-    apiKeyInput.value = key;
-    if (ghTokenInput && getGhToken()) ghTokenInput.value = getGhToken();
-    await loadMemory();
-    addWelcomeMessage();
-  } else {
-    addNoKeyNotice();
-  }
-}
+// ── Memoria ───────────────────────────────────────────────────
 
-// ── GitHub Storage ──────────────────────────────────────────────
-
-async function githubRequest(path, method = 'GET', body = null) {
-  const token = getGhToken();
-  if (!token) return null;
-  const url = `https://api.github.com/repos/${getGhRepo()}/contents/${path}`;
-  const headers = {
-    'Authorization': `Bearer ${token}`,
-    'Content-Type': 'application/json',
-    'Accept': 'application/vnd.github+json'
-  };
-  const opts = { method, headers };
-  if (body) opts.body = JSON.stringify(body);
-  const res = await fetch(url, opts);
-  if (!res.ok && res.status !== 404) return null;
-  if (res.status === 404) return null;
-  return res.json();
-}
-
-async function loadMemory() {
+function loadMemory() {
   try {
-    const file = await githubRequest('memory/memory.json');
-    if (file && file.content) {
-      const decoded = atob(file.content.replace(/\n/g, ''));
-      memoryData = JSON.parse(decoded);
-    }
+    const raw = localStorage.getItem('pepper_memory');
+    return raw ? JSON.parse(raw) : { proyectos: [], conversaciones: [], perfil: {} };
   } catch (e) {
-    memoryData = { perfil: {}, proyectos: [], conversaciones: [] };
+    return { proyectos: [], conversaciones: [], perfil: {} };
   }
 }
 
-async function saveMemory() {
-  try {
-    const token = getGhToken();
-    if (!token) return;
-    const content = btoa(unescape(encodeURIComponent(JSON.stringify(memoryData, null, 2))));
-    const existing = await githubRequest('memory/memory.json');
-    const body = {
-      message: `memoria: actualización ${new Date().toISOString().split('T')[0]}`,
-      content,
-      ...(existing ? { sha: existing.sha } : {})
-    };
-    await githubRequest('memory/memory.json', 'PUT', body);
-  } catch (e) {
-    console.error('Error guardando memoria:', e);
-  }
+function saveMemory(memory) {
+  localStorage.setItem('pepper_memory', JSON.stringify(memory));
 }
 
-async function saveFile(path, contentStr, commitMsg) {
-  try {
-    const token = getGhToken();
-    if (!token) return false;
-    const content = btoa(unescape(encodeURIComponent(contentStr)));
-    const existing = await githubRequest(path);
-    const body = {
-      message: commitMsg || `pepper: guardar ${path}`,
-      content,
-      ...(existing ? { sha: existing.sha } : {})
-    };
-    const res = await githubRequest(path, 'PUT', body);
-    return !!res;
-  } catch (e) {
-    return false;
-  }
-}
-
-async function saveConversation() {
+function saveCurrentSession() {
   if (currentSessionMessages.length === 0) return;
-  const date = new Date();
-  const dateStr = date.toISOString().split('T')[0];
-  const timeStr = date.toTimeString().split(' ')[0].replace(/:/g, '-');
-  const path = `conversaciones/${dateStr}/${timeStr}.json`;
+  const memory = loadMemory();
   const session = {
-    fecha: date.toISOString(),
+    fecha: new Date().toISOString(),
+    resumen: currentSessionMessages.slice(0, 2).map(m => m.mensaje).join(' | ').substring(0, 200),
     mensajes: currentSessionMessages
   };
-  await saveFile(path, JSON.stringify(session, null, 2), `conversación ${dateStr} ${timeStr}`);
-
-  // Actualizar memoria con resumen de la sesión
-  memoryData.conversaciones = memoryData.conversaciones || [];
-  memoryData.conversaciones.unshift({ fecha: date.toISOString(), mensajes: currentSessionMessages.length });
-  if (memoryData.conversaciones.length > 50) memoryData.conversaciones = memoryData.conversaciones.slice(0, 50);
-  await saveMemory();
+  memory.conversaciones.unshift(session);
+  if (memory.conversaciones.length > 20) memory.conversaciones = memory.conversaciones.slice(0, 20);
+  saveMemory(memory);
 }
 
 function buildMemoryContext() {
-  if (!memoryData || Object.keys(memoryData.perfil || {}).length === 0) return '';
-  const proyectos = (memoryData.proyectos || []).map(p => `- ${p.nombre}: ${p.estado}`).join('\n');
-  return `\n\n[MEMORIA DE CONVERSACIONES ANTERIORES]\nProyectos conocidos:\n${proyectos || 'Ninguno aún'}\nPerfil: ${JSON.stringify(memoryData.perfil)}`;
+  const memory = loadMemory();
+  const partes = [];
+  if (memory.proyectos && memory.proyectos.length > 0) {
+    partes.push('Proyectos conocidos:\n' + memory.proyectos.map(p => `- ${p.nombre}: ${p.estado}`).join('\n'));
+  }
+  if (memory.conversaciones && memory.conversaciones.length > 0) {
+    const ultimas = memory.conversaciones.slice(0, 5);
+    partes.push('Últimas conversaciones:\n' + ultimas.map(c => `- ${c.fecha.split('T')[0]}: ${c.resumen}`).join('\n'));
+  }
+  if (partes.length === 0) return '';
+  return '\n\n[MEMORIA DE CONVERSACIONES ANTERIORES]\n' + partes.join('\n\n');
 }
 
-// ── API Call ──────────────────────────────────────────────────
+// ── API ───────────────────────────────────────────────────────
 
 async function callPepper(userMessage) {
   const apiKey = getApiKey();
@@ -162,23 +97,12 @@ async function callPepper(userMessage) {
   currentSessionMessages.push({ rol: 'usuario', mensaje: userMessage, hora: new Date().toISOString() });
 
   const systemWithMemory = SYSTEM_PROMPT + buildMemoryContext();
-
-  const messages = [
-    { role: 'system', content: systemWithMemory },
-    ...conversationHistory
-  ];
+  const messages = [{ role: 'system', content: systemWithMemory }, ...conversationHistory];
 
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
-      max_tokens: 1000,
-      messages
-    })
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    body: JSON.stringify({ model: 'llama-3.3-70b-versatile', max_tokens: 1000, messages })
   });
 
   if (!response.ok) {
@@ -280,10 +204,15 @@ function addTyping() {
 function removeTyping() { document.getElementById('typing-indicator')?.remove(); }
 
 function addWelcomeMessage() {
-  const proyectos = (memoryData.proyectos || []).filter(p => p.estado === 'activo');
+  const memory = loadMemory();
+  const proyectos = (memory.proyectos || []).filter(p => p.estado === 'activo');
+  const conversaciones = memory.conversaciones || [];
   let msg = 'Hola! Soy PEPPER. Contame qué necesitás resolver hoy y lo analizamos juntos.';
-  if (proyectos.length > 0) {
-    msg = `Hola de nuevo! Tengo en memoria ${proyectos.length} proyecto(s) activo(s): ${proyectos.map(p => p.nombre).join(', ')}. ¿Continuamos con alguno o arrancamos algo nuevo?`;
+  if (conversaciones.length > 0 || proyectos.length > 0) {
+    const partes = [];
+    if (proyectos.length > 0) partes.push(`${proyectos.length} proyecto(s) activo(s): ${proyectos.map(p => p.nombre).join(', ')}`);
+    if (conversaciones.length > 0) partes.push(`${conversaciones.length} conversación(es) anteriores`);
+    msg = `Hola de nuevo! Tengo en memoria: ${partes.join(' y ')}. ¿Continuamos o arrancamos algo nuevo?`;
   }
   addMessage('pepper', msg);
 }
@@ -291,7 +220,7 @@ function addWelcomeMessage() {
 function addNoKeyNotice() {
   const wrap = document.createElement('div');
   wrap.className = 'msg pepper';
-  wrap.innerHTML = `<div class="msg-av">P</div><div><div class="notice"><i class="ti ti-key"></i><div>Para activarme necesitás configurar tu API Key de Groq y tu GitHub Token. Hacé clic en el ícono <strong>⚙</strong> arriba a la derecha.</div></div></div>`;
+  wrap.innerHTML = `<div class="msg-av">P</div><div><div class="notice"><i class="ti ti-key"></i><div>Para activarme necesitás configurar tu API Key de Groq. Hacé clic en el ícono <strong>⚙</strong> arriba a la derecha y pegá tu clave.</div></div></div>`;
   messagesEl.appendChild(wrap);
 }
 
@@ -384,8 +313,8 @@ inputEl.addEventListener('input', () => {
   inputEl.style.height = 'auto';
   inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';
 });
-btnClear.addEventListener('click', async () => {
-  await saveConversation();
+btnClear.addEventListener('click', () => {
+  saveCurrentSession();
   conversationHistory = [];
   currentSessionMessages = [];
   messagesEl.innerHTML = '';
@@ -396,17 +325,14 @@ modalClose.addEventListener('click', () => modalSettings.classList.add('hidden')
 modalSettings.addEventListener('click', (e) => { if (e.target === modalSettings) modalSettings.classList.add('hidden'); });
 btnSaveKey.addEventListener('click', () => {
   const key = apiKeyInput.value.trim();
-  const ghToken = ghTokenInput ? ghTokenInput.value.trim() : '';
   if (key) {
     localStorage.setItem('pepper_api_key', key);
-    if (ghToken) localStorage.setItem('pepper_gh_token', ghToken);
     modalSettings.classList.add('hidden');
     if (messagesEl.querySelector('.notice')) { messagesEl.innerHTML = ''; addWelcomeMessage(); }
   }
 });
 
-// Guardar conversación al cerrar
-window.addEventListener('beforeunload', () => { saveConversation(); });
-
+window.addEventListener('beforeunload', () => saveCurrentSession());
 window.speechSynthesis?.getVoices();
-init();
+addWelcomeMessage();
+if (!getApiKey()) { messagesEl.innerHTML = ''; addNoKeyNotice(); }
