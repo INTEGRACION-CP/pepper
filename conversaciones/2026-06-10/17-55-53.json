@@ -1,0 +1,15 @@
+{
+  "fecha": "2026-06-10T20:55:53.525Z",
+  "mensajes": [
+    {
+      "rol": "usuario",
+      "mensaje": "Hola, recuerdas que hablamos antes de que cierre el char y lo vuelva a abrir?",
+      "hora": "2026-06-10T20:55:05.193Z"
+    },
+    {
+      "rol": "pepper",
+      "mensaje": "No recuerdo nada de nuestra conversación anterior porque soy una IA diseñada para procesar información en tiempo real y no tengo memoria a largo plazo. Cada vez que iniciamos una nueva conversación, empezamos de cero. ¿En qué puedo ayudarte hoy?",
+      "hora": "2026-06-10T20:55:05.848Z"
+    }
+  ]
+}
