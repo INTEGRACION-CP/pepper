@@ -1,3 +1,6 @@
+const SUPABASE_URL = 'https://bhwfgbdgrdzrrrzxwihg.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJod2ZnYmRncmR6cnJyenh3aWhnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEyMDgyNTUsImV4cCI6MjA5Njc4NDI1NX0.oeIVLL30O6vXbvFcns-mtHcuRxZium-SrMmz3lkTi9o';
+
 const SYSTEM_PROMPT = `Sos PEPPER (Personalized & Efficient Personal Assistant with Enhanced Reasoning), una IA asistente creada para ayudar a tu usuario a desarrollar proyectos que mejoren la vida de las personas.
 
 Tu personalidad:
@@ -45,36 +48,55 @@ const btnSaveKey = document.getElementById('btn-save-key');
 
 function getApiKey() { return localStorage.getItem('pepper_api_key') || ''; }
 
+// ── Supabase ──────────────────────────────────────────────────
+
+async function sbGet(clave) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/memoria?clave=eq.${clave}&select=valor`, {
+    headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+  });
+  if (!res.ok) return null;
+  const data = await res.json();
+  return data.length > 0 ? data[0].valor : null;
+}
+
+async function sbSet(clave, valor) {
+  await fetch(`${SUPABASE_URL}/rest/v1/memoria`, {
+    method: 'POST',
+    headers: {
+      'apikey': SUPABASE_KEY,
+      'Authorization': `Bearer ${SUPABASE_KEY}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'resolution=merge-duplicates'
+    },
+    body: JSON.stringify({ clave, valor, actualizado_at: new Date().toISOString() })
+  });
+}
+
 // ── Memoria ───────────────────────────────────────────────────
 
-function loadMemory() {
+async function loadMemory() {
   try {
-    const raw = localStorage.getItem('pepper_memory');
-    return raw ? JSON.parse(raw) : { proyectos: [], conversaciones: [], perfil: {} };
+    const data = await sbGet('memoria_principal');
+    return data || { proyectos: [], conversaciones: [], perfil: {} };
   } catch (e) {
     return { proyectos: [], conversaciones: [], perfil: {} };
   }
 }
 
-function saveMemory(memory) {
-  localStorage.setItem('pepper_memory', JSON.stringify(memory));
-}
-
-function saveCurrentSession() {
+async function saveCurrentSession(memory) {
   if (currentSessionMessages.length === 0) return;
-  const memory = loadMemory();
   const session = {
     fecha: new Date().toISOString(),
     resumen: currentSessionMessages.slice(0, 2).map(m => m.mensaje).join(' | ').substring(0, 200),
     mensajes: currentSessionMessages
   };
+  memory.conversaciones = memory.conversaciones || [];
   memory.conversaciones.unshift(session);
   if (memory.conversaciones.length > 20) memory.conversaciones = memory.conversaciones.slice(0, 20);
-  saveMemory(memory);
+  await sbSet('memoria_principal', memory);
 }
 
-function buildMemoryContext() {
-  const memory = loadMemory();
+function buildMemoryContext(memory) {
   const partes = [];
   if (memory.proyectos && memory.proyectos.length > 0) {
     partes.push('Proyectos conocidos:\n' + memory.proyectos.map(p => `- ${p.nombre}: ${p.estado}`).join('\n'));
@@ -89,6 +111,8 @@ function buildMemoryContext() {
 
 // ── API ───────────────────────────────────────────────────────
 
+let memoryCache = null;
+
 async function callPepper(userMessage) {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error('NO_KEY');
@@ -96,7 +120,7 @@ async function callPepper(userMessage) {
   conversationHistory.push({ role: 'user', content: userMessage });
   currentSessionMessages.push({ rol: 'usuario', mensaje: userMessage, hora: new Date().toISOString() });
 
-  const systemWithMemory = SYSTEM_PROMPT + buildMemoryContext();
+  const systemWithMemory = SYSTEM_PROMPT + buildMemoryContext(memoryCache || {});
   const messages = [{ role: 'system', content: systemWithMemory }, ...conversationHistory];
 
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -203,8 +227,7 @@ function addTyping() {
 
 function removeTyping() { document.getElementById('typing-indicator')?.remove(); }
 
-function addWelcomeMessage() {
-  const memory = loadMemory();
+function showWelcome(memory) {
   const proyectos = (memory.proyectos || []).filter(p => p.estado === 'activo');
   const conversaciones = memory.conversaciones || [];
   let msg = 'Hola! Soy PEPPER. Contame qué necesitás resolver hoy y lo analizamos juntos.';
@@ -313,12 +336,14 @@ inputEl.addEventListener('input', () => {
   inputEl.style.height = 'auto';
   inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';
 });
-btnClear.addEventListener('click', () => {
-  saveCurrentSession();
+btnClear.addEventListener('click', async () => {
+  const memory = memoryCache || await loadMemory();
+  await saveCurrentSession(memory);
+  memoryCache = memory;
   conversationHistory = [];
   currentSessionMessages = [];
   messagesEl.innerHTML = '';
-  addWelcomeMessage();
+  showWelcome(memory);
 });
 btnSettings.addEventListener('click', () => modalSettings.classList.remove('hidden'));
 modalClose.addEventListener('click', () => modalSettings.classList.add('hidden'));
@@ -328,11 +353,24 @@ btnSaveKey.addEventListener('click', () => {
   if (key) {
     localStorage.setItem('pepper_api_key', key);
     modalSettings.classList.add('hidden');
-    if (messagesEl.querySelector('.notice')) { messagesEl.innerHTML = ''; addWelcomeMessage(); }
+    if (messagesEl.querySelector('.notice')) { messagesEl.innerHTML = ''; showWelcome(memoryCache || {}); }
   }
 });
 
-window.addEventListener('beforeunload', () => saveCurrentSession());
+window.addEventListener('beforeunload', async () => {
+  const memory = memoryCache || await loadMemory();
+  await saveCurrentSession(memory);
+});
+
+// Init
+async function init() {
+  if (!getApiKey()) { addNoKeyNotice(); return; }
+  apiKeyInput.value = getApiKey();
+  addMessage('pepper', 'Cargando memoria...');
+  memoryCache = await loadMemory();
+  messagesEl.innerHTML = '';
+  showWelcome(memoryCache);
+}
+
 window.speechSynthesis?.getVoices();
-addWelcomeMessage();
-if (!getApiKey()) { messagesEl.innerHTML = ''; addNoKeyNotice(); }
+init();
