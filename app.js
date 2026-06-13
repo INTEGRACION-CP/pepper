@@ -1,5 +1,6 @@
 const SUPABASE_URL = 'https://bhwfgbdgrdzrrrzxwihg.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJod2ZnYmRncmR6cnJyenh3aWhnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEyMDgyNTUsImV4cCI6MjA5Njc4NDI1NX0.oeIVLL30O6vXbvFcns-mtHcuRxZium-SrMmz3lkTi9o';
+const USER_ID = 'dade339f-6c98-416c-ab50-03af40905ce2';
 
 const SYSTEM_PROMPT = `Sos PEPPER (Personalized & Efficient Personal Assistant with Enhanced Reasoning), una IA asistente creada para ayudar a tu usuario a desarrollar proyectos que mejoren la vida de las personas.
 
@@ -9,6 +10,7 @@ Tu personalidad:
 - Siempre recordás que el usuario decide: vos proponés, él aprueba con OK o NO OK
 - Evaluás riesgos antes de actuar y los comunicás con honestidad
 - Sos concisa: máximo 3-4 oraciones antes de una propuesta
+- Cuando mostrás código, siempre usá bloques con triple backtick y el lenguaje
 
 Tu flujo de trabajo:
 1. Al iniciar revisás la memoria disponible para recordar el contexto del usuario
@@ -18,20 +20,19 @@ Tu flujo de trabajo:
 5. Esperás el OK del usuario antes de continuar
 6. Si algo puede dañar a alguien, no avanzás y lo comunicás claramente
 
-Formato de propuesta — usalo cuando tengas un plan concreto:
+Formato de propuesta:
 [PROPUESTA]
-título: (título corto de la propuesta)
-pasos: (cada paso separado por el carácter |)
-riesgo: (bajo|medio|alto — descripción de una línea)
-[/PROPUESTA]
-
-No uses el bloque PROPUESTA para respuestas conversacionales o cuando solo estás haciendo preguntas de clarificación.`;
+título: (título corto)
+pasos: (pasos separados por |)
+riesgo: (bajo|medio|alto — descripción)
+[/PROPUESTA]`;
 
 let conversationHistory = [];
 let attachedFile = null;
 let isListening = false;
 let recognition = null;
 let currentSessionMessages = [];
+let memoryCache = null;
 
 const messagesEl = document.getElementById('messages');
 const inputEl = document.getElementById('user-input');
@@ -72,6 +73,16 @@ async function sbSet(clave, valor) {
   });
 }
 
+async function saveDecision(contexto, propuesta, respuesta) {
+  try {
+    await fetch('/api/save-decision', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: USER_ID, contexto, propuesta, respuesta, reasoning: '' })
+    });
+  } catch(e) { console.error('Error guardando decision:', e); }
+}
+
 // ── Memoria ───────────────────────────────────────────────────
 
 async function loadMemory() {
@@ -99,19 +110,63 @@ async function saveCurrentSession(memory) {
 function buildMemoryContext(memory) {
   const partes = [];
   if (memory.proyectos && memory.proyectos.length > 0) {
-    partes.push('Proyectos conocidos:\n' + memory.proyectos.map(p => `- ${p.nombre}: ${p.estado}`).join('\n'));
+    partes.push('Proyectos:\n' + memory.proyectos.map(p => `- ${p.nombre}: ${p.estado}`).join('\n'));
   }
   if (memory.conversaciones && memory.conversaciones.length > 0) {
     const ultimas = memory.conversaciones.slice(0, 5);
-    partes.push('Últimas conversaciones:\n' + ultimas.map(c => `- ${c.fecha.split('T')[0]}: ${c.resumen}`).join('\n'));
+    partes.push('Conversaciones anteriores:\n' + ultimas.map(c => `- ${c.fecha.split('T')[0]}: ${c.resumen}`).join('\n'));
   }
   if (partes.length === 0) return '';
-  return '\n\n[MEMORIA DE CONVERSACIONES ANTERIORES]\n' + partes.join('\n\n');
+  return '\n\n[MEMORIA]\n' + partes.join('\n\n');
+}
+
+// ── Render ────────────────────────────────────────────────────
+
+function escapeHtml(str) {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function renderMarkdown(text) {
+  // Primero escapamos el HTML del texto completo excepto los bloques de código
+  let parts = [];
+  let lastIndex = 0;
+  // Regex para bloques de código
+  const codeBlockRegex = /```([a-zA-Z0-9]*)\n?([\s\S]*?)```/g;
+  let match;
+  
+  while ((match = codeBlockRegex.exec(text)) !== null) {
+    // Texto antes del bloque de código
+    if (match.index > lastIndex) {
+      let chunk = escapeHtml(text.slice(lastIndex, match.index));
+      chunk = chunk.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      chunk = chunk.replace(/`([^`]+)`/g, '<code>$1</code>');
+      chunk = chunk.replace(/\n/g, '<br>');
+      parts.push(chunk);
+    }
+    // Bloque de código
+    const lang = match[1] || 'plaintext';
+    const code = escapeHtml(match[2].trim());
+    parts.push(`<pre><code class="language-${lang}">${code}</code></pre>`);
+    lastIndex = match.index + match[0].length;
+  }
+  
+  // Resto del texto después del último bloque
+  if (lastIndex < text.length) {
+    let chunk = escapeHtml(text.slice(lastIndex));
+    chunk = chunk.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    chunk = chunk.replace(/`([^`]+)`/g, '<code>$1</code>');
+    chunk = chunk.replace(/\n/g, '<br>');
+    parts.push(chunk);
+  }
+  
+  return parts.join('');
 }
 
 // ── API ───────────────────────────────────────────────────────
-
-let memoryCache = null;
 
 async function callPepper(userMessage) {
   const apiKey = getApiKey();
@@ -120,7 +175,8 @@ async function callPepper(userMessage) {
   conversationHistory.push({ role: 'user', content: userMessage });
   currentSessionMessages.push({ rol: 'usuario', mensaje: userMessage, hora: new Date().toISOString() });
 
-  const systemWithMemoryStr = SYSTEM_PROMPT + buildMemoryContext(memoryCache || {});
+  const systemWithMemory = SYSTEM_PROMPT + buildMemoryContext(memoryCache || {});
+
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -131,8 +187,8 @@ async function callPepper(userMessage) {
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-5',
-      max_tokens: 1000,
-      system: systemWithMemoryStr,
+      max_tokens: 1500,
+      system: systemWithMemory,
       messages: conversationHistory
     })
   });
@@ -165,28 +221,6 @@ function parseResponse(text) {
   return { cleanText, proposal };
 }
 
-
-
-
-
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}
-
-function renderText(text) {
-  let html = escapeHtml(text);
-  html = html.replace(/```(\w+)?\n?([\s\S]*?)```/g, function(match, lang, code) {
-    var language = lang || 'plaintext';
-    return '<pre><code class="language-' + language + '">' + code.trim() + '</code></pre>';
-  });
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/\n/g, '<br>');
-  return html;
-}
-
 function addMessage(role, text, proposal = null, fileName = null) {
   const wrap = document.createElement('div');
   wrap.className = `msg ${role}`;
@@ -197,14 +231,18 @@ function addMessage(role, text, proposal = null, fileName = null) {
   body.style.cssText = 'display:flex;flex-direction:column;min-width:0;';
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
+  
   if (role === 'pepper') {
-    bubble.innerHTML = renderText(text);
-    bubble.querySelectorAll('pre code').forEach(block => {
-      if (window.hljs) hljs.highlightElement(block);
-    });
+    bubble.innerHTML = renderMarkdown(text);
+    setTimeout(() => {
+      bubble.querySelectorAll('pre code').forEach(block => {
+        if (window.hljs) window.hljs.highlightElement(block);
+      });
+    }, 0);
   } else {
     bubble.textContent = text;
   }
+
   if (fileName) {
     const badge = document.createElement('div');
     badge.className = 'file-badge';
@@ -280,7 +318,7 @@ function showWelcome(memory) {
 function addNoKeyNotice() {
   const wrap = document.createElement('div');
   wrap.className = 'msg pepper';
-  wrap.innerHTML = `<div class="msg-av">P</div><div><div class="notice"><i class="ti ti-key"></i><div>Para activarme necesitás configurar tu API Key de Groq. Hacé clic en el ícono <strong>⚙</strong> arriba a la derecha y pegá tu clave.</div></div></div>`;
+  wrap.innerHTML = `<div class="msg-av">P</div><div><div class="notice"><i class="ti ti-key"></i><div>Para activarme necesitás configurar tu API Key de Anthropic. Hacé clic en el ícono <strong>⚙</strong> arriba a la derecha.</div></div></div>`;
   messagesEl.appendChild(wrap);
 }
 
@@ -288,6 +326,9 @@ async function handleDecision(decision, titulo, actionsEl) {
   actionsEl.innerHTML = decision === 'ok'
     ? `<span style="color:#1D9E75;font-size:13px;display:flex;align-items:center;gap:5px"><i class="ti ti-check"></i>Aprobado</span>`
     : `<span style="color:#E24B4A;font-size:13px;display:flex;align-items:center;gap:5px"><i class="ti ti-x"></i>Buscando alternativa...</span>`;
+  
+  await saveDecision(titulo, titulo, decision === 'ok' ? 'OK' : 'NO OK');
+  
   const msg = decision === 'ok'
     ? `OK, adelante con: ${titulo}`
     : `NO OK para: ${titulo}. Por favor buscá una alternativa diferente.`;
@@ -399,7 +440,6 @@ window.addEventListener('beforeunload', async () => {
   await saveCurrentSession(memory);
 });
 
-// Init
 async function init() {
   if (!getApiKey()) { addNoKeyNotice(); return; }
   apiKeyInput.value = getApiKey();
