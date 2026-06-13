@@ -108,30 +108,129 @@ async function loadMemory() {
   }
 }
 
+async function extractMemoryWithClaude(messages, currentMemory) {
+  const apiKey = getApiKey();
+  if (!apiKey || messages.length === 0) return currentMemory;
+
+  const conversationText = messages.map(m => `${m.rol.toUpperCase()}: ${m.mensaje}`).join('\n');
+  const currentMemoryText = JSON.stringify(currentMemory, null, 2);
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-5',
+      max_tokens: 1500,
+      system: `Sos un extractor de memoria para PEPPER, un asistente de IA personal.
+Tu tarea es analizar una conversación y actualizar la memoria estructurada del usuario.
+Devolvé SOLO un JSON válido con esta estructura exacta, sin texto adicional:
+{
+  "perfil": {
+    "nombre": "string o null",
+    "ocupacion": "string o null", 
+    "contexto": "string o null",
+    "preferencias": "string o null"
+  },
+  "proyectos": [
+    {
+      "nombre": "string",
+      "descripcion": "string",
+      "estado": "activo|pausado|completado",
+      "detalles": "string"
+    }
+  ],
+  "conversaciones": [
+    {
+      "fecha": "ISO date string",
+      "resumen": "resumen detallado de 2-3 oraciones de lo más importante",
+      "temas": ["tema1", "tema2"]
+    }
+  ],
+  "aprendizajes": ["cosa importante 1", "cosa importante 2"]
+}
+Mantené toda la información existente y agregá/actualizá con lo nuevo de la conversación.`,
+      messages: [{
+        role: 'user',
+        content: `MEMORIA ACTUAL:\n${currentMemoryText}\n\nCONVERSACIÓN A ANALIZAR:\n${conversationText}\n\nActualizá la memoria con la información de esta conversación.`
+      }]
+    })
+  });
+
+  if (!response.ok) return currentMemory;
+
+  const data = await response.json();
+  const text = data.content.map(b => b.text || '').join('').trim();
+  
+  try {
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (jsonMatch) return JSON.parse(jsonMatch[0]);
+  } catch(e) { console.error('Error parsing memory:', e); }
+  
+  return currentMemory;
+}
+
 async function saveCurrentSession(memory) {
   if (currentSessionMessages.length === 0) return;
-  const session = {
-    fecha: new Date().toISOString(),
-    resumen: currentSessionMessages.slice(0, 2).map(m => m.mensaje).join(' | ').substring(0, 200),
-    mensajes: currentSessionMessages
-  };
-  memory.conversaciones = memory.conversaciones || [];
-  memory.conversaciones.unshift(session);
-  if (memory.conversaciones.length > 20) memory.conversaciones = memory.conversaciones.slice(0, 20);
-  await sbSet('memoria_principal', memory);
+  try {
+    const updatedMemory = await extractMemoryWithClaude(currentSessionMessages, memory);
+    await sbSet('memoria_principal', updatedMemory);
+    memoryCache = updatedMemory;
+  } catch(e) {
+    console.error('Error guardando sesion:', e);
+    // Fallback: guardar resumen básico
+    const session = {
+      fecha: new Date().toISOString(),
+      resumen: currentSessionMessages.slice(0, 2).map(m => m.mensaje).join(' | ').substring(0, 300),
+      mensajes: currentSessionMessages
+    };
+    memory.conversaciones = memory.conversaciones || [];
+    memory.conversaciones.unshift(session);
+    if (memory.conversaciones.length > 20) memory.conversaciones = memory.conversaciones.slice(0, 20);
+    await sbSet('memoria_principal', memory);
+  }
 }
 
 function buildMemoryContext(memory) {
   const partes = [];
+  
+  // Perfil del usuario
+  if (memory.perfil && Object.keys(memory.perfil).length > 0) {
+    const p = memory.perfil;
+    const perfilTexto = Object.entries(p)
+      .filter(([k, v]) => v)
+      .map(([k, v]) => `- ${k}: ${v}`)
+      .join('\n');
+    if (perfilTexto) partes.push('PERFIL DEL USUARIO:\n' + perfilTexto);
+  }
+
+  // Proyectos
   if (memory.proyectos && memory.proyectos.length > 0) {
-    partes.push('Proyectos:\n' + memory.proyectos.map(p => `- ${p.nombre}: ${p.estado}`).join('\n'));
+    const proyectosTexto = memory.proyectos.map(p => 
+      `- ${p.nombre} (${p.estado}): ${p.descripcion || ''}${p.detalles ? ' — ' + p.detalles : ''}`
+    ).join('\n');
+    partes.push('PROYECTOS:\n' + proyectosTexto);
   }
+
+  // Aprendizajes
+  if (memory.aprendizajes && memory.aprendizajes.length > 0) {
+    partes.push('LO QUE SÉ DEL USUARIO:\n' + memory.aprendizajes.map(a => `- ${a}`).join('\n'));
+  }
+
+  // Conversaciones recientes
   if (memory.conversaciones && memory.conversaciones.length > 0) {
-    const ultimas = memory.conversaciones.slice(0, 5);
-    partes.push('Conversaciones anteriores:\n' + ultimas.map(c => `- ${c.fecha.split('T')[0]}: ${c.resumen}`).join('\n'));
+    const ultimas = memory.conversaciones.slice(0, 3);
+    partes.push('CONVERSACIONES RECIENTES:\n' + ultimas.map(c => 
+      `- ${c.fecha ? c.fecha.split('T')[0] : 'reciente'}: ${c.resumen}`
+    ).join('\n'));
   }
+
   if (partes.length === 0) return '';
-  return '\n\n[MEMORIA]\n' + partes.join('\n\n');
+  return '\n\n[MEMORIA PERSISTENTE — usá esta información para personalizar tus respuestas]\n' + partes.join('\n\n');
 }
 
 // ── Render ────────────────────────────────────────────────────
