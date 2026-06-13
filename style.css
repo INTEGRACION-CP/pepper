@@ -280,3 +280,44 @@ html, body {
   #input-area { padding: 10px 12px; }
   .msg { max-width: 95%; }
 }
+
+/* ── Bloques de código ────────────────────────────────────── */
+pre {
+  background: #1e1e1e;
+  border-radius: 8px;
+  padding: 16px;
+  margin: 12px 0;
+  overflow-x: auto;
+  border-left: 4px solid #007acc;
+}
+code {
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 14px;
+  line-height: 1.5;
+}
+pre code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+}
+p code, li code {
+  background: #2d2d30;
+  color: #ce9178;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 13px;
+}
+.command-block {
+  background: #0e639c;
+  color: #ffffff;
+  padding: 12px 16px;
+  border-radius: 6px;
+  margin: 12px 0;
+  font-family: 'Consolas', monospace;
+  border-left: 4px solid #1e88e5;
+}
+.command-block::before {
+  content: '▶ ';
+  color: #4fc3f7;
+  font-weight: bold;
+}

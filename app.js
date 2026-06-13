@@ -165,6 +165,33 @@ function parseResponse(text) {
   return { cleanText, proposal };
 }
 
+function escapeHtml(text) {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function renderText(text) {
+  let html = text;
+  // Bloques de código con ```
+  html = html.replace(/```(\w+)?
+?([\s\S]*?)```/g, (match, lang, code) => {
+    const language = lang || 'plaintext';
+    return `<pre><code class="language-${language}">${escapeHtml(code.trim())}</code></pre>`;
+  });
+  // Código inline
+  html = html.replace(/`([^`
+]+)`/g, '<code>$1</code>');
+  // Negritas
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // Saltos de línea
+  html = html.replace(/
+/g, '<br>');
+  return html;
+}
+
 function addMessage(role, text, proposal = null, fileName = null) {
   const wrap = document.createElement('div');
   wrap.className = `msg ${role}`;
@@ -175,7 +202,14 @@ function addMessage(role, text, proposal = null, fileName = null) {
   body.style.cssText = 'display:flex;flex-direction:column;min-width:0;';
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
-  bubble.textContent = text;
+  if (role === 'pepper') {
+    bubble.innerHTML = renderText(text);
+    bubble.querySelectorAll('pre code').forEach(block => {
+      if (window.hljs) hljs.highlightElement(block);
+    });
+  } else {
+    bubble.textContent = text;
+  }
   if (fileName) {
     const badge = document.createElement('div');
     badge.className = 'file-badge';
