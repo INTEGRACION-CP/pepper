@@ -165,30 +165,25 @@ function parseResponse(text) {
   return { cleanText, proposal };
 }
 
+
+
+
+
 function escapeHtml(text) {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
 }
 
 function renderText(text) {
-  let html = text;
-  // Bloques de código con ```
-  html = html.replace(/```(\w+)?
-?([\s\S]*?)```/g, (match, lang, code) => {
-    const language = lang || 'plaintext';
-    return `<pre><code class="language-${language}">${escapeHtml(code.trim())}</code></pre>`;
+  let html = escapeHtml(text);
+  html = html.replace(/```(\w+)?\n?([\s\S]*?)```/g, function(match, lang, code) {
+    var language = lang || 'plaintext';
+    return '<pre><code class="language-' + language + '">' + code.trim() + '</code></pre>';
   });
-  // Código inline
-  html = html.replace(/`([^`
-]+)`/g, '<code>$1</code>');
-  // Negritas
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  // Saltos de línea
-  html = html.replace(/
-/g, '<br>');
+  html = html.replace(/\n/g, '<br>');
   return html;
 }
 
