@@ -1,8 +1,8 @@
-// api/setup-database.js
+// api/save-decision.js
 import { createClient } from '@supabase/supabase-js'
 
 export default async function handler(req, res) {
-  if (req.method !== 'GET') {
+  if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' })
   }
 
@@ -15,18 +15,21 @@ export default async function handler(req, res) {
 
   const supabase = createClient(supabaseUrl, supabaseKey)
 
+  const { user_id, project_id, contexto, propuesta, respuesta, reasoning } = req.body
+
+  if (!user_id || !contexto || !propuesta || !respuesta) {
+    return res.status(400).json({ error: 'Missing required fields' })
+  }
+
   try {
-    const tables = ['users', 'projects', 'decisions', 'resources', 'contexts']
-    const results = {}
+    const { data, error } = await supabase
+      .from('decisions')
+      .insert([{ user_id, project_id, contexto, propuesta, respuesta, reasoning }])
+      .select()
 
-    for (const table of tables) {
-      const { count, error } = await supabase
-        .from(table)
-        .select('*', { count: 'exact', head: true })
-      results[table] = error ? `❌ Error: ${error.message}` : `✅ OK (${count} registros)`
-    }
+    if (error) throw error
 
-    return res.status(200).json({ status: 'Database ready', tables: results })
+    return res.status(200).json({ success: true, decision: data[0] })
   } catch (error) {
     return res.status(500).json({ error: error.message })
   }
