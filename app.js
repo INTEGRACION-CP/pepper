@@ -61,16 +61,30 @@ async function sbGet(clave) {
 }
 
 async function sbSet(clave, valor) {
-  await fetch(`${SUPABASE_URL}/rest/v1/memoria`, {
-    method: 'POST',
+  // Intentar UPDATE primero
+  const updateRes = await fetch(`${SUPABASE_URL}/rest/v1/memoria?clave=eq.${clave}`, {
+    method: 'PATCH',
     headers: {
       'apikey': SUPABASE_KEY,
       'Authorization': `Bearer ${SUPABASE_KEY}`,
       'Content-Type': 'application/json',
-      'Prefer': 'resolution=merge-duplicates'
+      'Prefer': 'return=minimal'
     },
-    body: JSON.stringify({ clave, valor, actualizado_at: new Date().toISOString() })
+    body: JSON.stringify({ valor, actualizado_at: new Date().toISOString() })
   });
+  // Si no existia, hacer INSERT
+  if (updateRes.status === 404 || updateRes.headers.get('content-range') === '*/0') {
+    await fetch(`${SUPABASE_URL}/rest/v1/memoria`, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal'
+      },
+      body: JSON.stringify({ clave, valor, actualizado_at: new Date().toISOString() })
+    });
+  }
 }
 
 async function saveDecision(contexto, propuesta, respuesta) {
