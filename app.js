@@ -307,10 +307,8 @@ function showWelcome(memory) {
   const conversaciones = memory.conversaciones || [];
   let msg = 'Hola! Soy PEPPER. Contame qué necesitás resolver hoy y lo analizamos juntos.';
   if (conversaciones.length > 0 || proyectos.length > 0) {
-    const partes = [];
-    if (proyectos.length > 0) partes.push(`${proyectos.length} proyecto(s) activo(s): ${proyectos.map(p => p.nombre).join(', ')}`);
-    if (conversaciones.length > 0) partes.push(`${conversaciones.length} conversación(es) anteriores`);
-    msg = `Hola de nuevo! Tengo en memoria: ${partes.join(' y ')}. ¿Continuamos o arrancamos algo nuevo?`;
+    const proyectosActivos = proyectos.length > 0 ? ` Tengo ${proyectos.length} proyecto(s) activo(s): ${proyectos.map(p => p.nombre).join(', ')}.` : '';
+    msg = `Hola de nuevo Matías.${proyectosActivos} ¿En qué te ayudo hoy?`;
   }
   addMessage('pepper', msg);
 }
@@ -363,6 +361,10 @@ async function sendMessage() {
     const { cleanText, proposal } = parseResponse(reply);
     addMessage('pepper', cleanText, proposal);
     speakText(cleanText);
+    // Autoguardado después de cada respuesta
+    const memory = memoryCache || await loadMemory();
+    await saveCurrentSession(memory);
+    memoryCache = memory;
   } catch (e) {
     removeTyping();
     addMessage('pepper', handleError(e));
