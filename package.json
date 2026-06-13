@@ -1,0 +1,24 @@
+{
+  "name": "pepper",
+  "version": "1.0.0",
+  "description": "<!DOCTYPE html>\r <html lang=\"es\">\r <head>\r   <meta charset=\"UTF-8\" />\r   <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\r   <title>PEPPER — Tu asistente personal</title>\r   <link rel=\"preconnect\" href=\"https://fonts.googleapis.com\" />\r   <link href=\"https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap\" rel=\"stylesheet\" />\r   <link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css\" />\r   <link rel=\"stylesheet\" href=\"style.css\" />\r </head>\r <body>\r   <div id=\"app\">\r     <header id=\"header\">\r       <div class=\"header-left\">\r         <div class=\"avatar\">P</div>\r         <div class=\"header-info\">\r           <span class=\"header-name\">PEPPER</span>\r           <span class=\"header-status\"><span class=\"dot\"></span>lista para ayudarte</span>\r         </div>\r       </div>\r       <div class=\"header-right\">\r         <button id=\"btn-clear\" title=\"Nueva conversación\"><i class=\"ti ti-refresh\"></i></button>\r         <button id=\"btn-settings\" title=\"Configuración\"><i class=\"ti ti-settings\"></i></button>\r       </div>\r     </header>",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/INTEGRACION-CP/pepper.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/INTEGRACION-CP/pepper/issues"
+  },
+  "homepage": "https://github.com/INTEGRACION-CP/pepper#readme",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.108.1"
+  }
+}
