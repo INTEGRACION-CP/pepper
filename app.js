@@ -125,7 +125,7 @@ async function extractMemoryWithClaude(messages, currentMemory) {
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-5',
-      max_tokens: 1500,
+      max_tokens: 4000,
       system: `Sos un extractor de memoria para PEPPER, un asistente de IA personal.
 Tu tarea es analizar una conversación y actualizar la memoria estructurada del usuario.
 Devolvé SOLO un JSON válido con esta estructura exacta, sin texto adicional:
