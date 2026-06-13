@@ -120,13 +120,21 @@ async function callPepper(userMessage) {
   conversationHistory.push({ role: 'user', content: userMessage });
   currentSessionMessages.push({ rol: 'usuario', mensaje: userMessage, hora: new Date().toISOString() });
 
-  const systemWithMemory = SYSTEM_PROMPT + buildMemoryContext(memoryCache || {});
-  const messages = [{ role: 'system', content: systemWithMemory }, ...conversationHistory];
-
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+  const systemWithMemoryStr = SYSTEM_PROMPT + buildMemoryContext(memoryCache || {});
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-    body: JSON.stringify({ model: 'llama-3.3-70b-versatile', max_tokens: 1000, messages })
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-5',
+      max_tokens: 1000,
+      system: systemWithMemoryStr,
+      messages: conversationHistory
+    })
   });
 
   if (!response.ok) {
@@ -135,7 +143,7 @@ async function callPepper(userMessage) {
   }
 
   const data = await response.json();
-  const text = data.choices[0].message.content;
+  const text = data.content.map(b => b.text || '').join('');
   conversationHistory.push({ role: 'assistant', content: text });
   currentSessionMessages.push({ rol: 'pepper', mensaje: text, hora: new Date().toISOString() });
   return text;
