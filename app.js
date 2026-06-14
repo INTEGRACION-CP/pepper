@@ -2,6 +2,8 @@
 const SUPABASE_URL = 'https://bhwfgbdgrdzrrrzxwihg.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJod2ZnYmRncmR6cnJyenh3aWhnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEyMDgyNTUsImV4cCI6MjA5Njc4NDI1NX0.oeIVLL30O6vXbvFcns-mtHcuRxZium-SrMmz3lkTi9o';
 const USER_ID = 'dade339f-6c98-416c-ab50-03af40905ce2';
+const AGENT_SECRET = 'pepper-secret-local';
+let AGENT_URL = localStorage.getItem('pepper_agent_url') || '';
 
 const SYSTEM_PROMPT = `Sos PEPPER (Personalized & Efficient Personal Assistant with Enhanced Reasoning).
 Tu misión: ayudar a Matías a desarrollar proyectos que mejoren la vida de las personas.
@@ -25,7 +27,14 @@ Formato de propuesta:
 título: (título corto)
 pasos: (pasos separados por |)
 riesgo: (bajo|medio|alto — descripción)
-[/PROPUESTA]`;
+[/PROPUESTA]
+
+Cuando el agente local esté conectado podés:
+- Leer archivos del proyecto
+- Ejecutar comandos Python
+- Listar directorios
+- Escribir y modificar código
+Siempre pedí OK antes de escribir o ejecutar algo.`;
 
 // ── Estado ────────────────────────────────────────────────────
 let conversationHistory = [];
@@ -203,6 +212,55 @@ async function processAndSaveMemory() {
     console.error('Error procesando memoria:', e);
     setStatus('lista para ayudarte');
   }
+}
+
+// ── Agente Local ─────────────────────────────────────────────
+function getAgentToken() {
+  // Hash simple del secret para el token
+  return AGENT_SECRET;
+}
+
+async function agentCall(endpoint, data = null) {
+  if (!AGENT_URL) throw new Error('Agente no configurado');
+  const url = `${AGENT_URL}${endpoint}`;
+  const opts = {
+    method: data ? 'POST' : 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${getAgentToken()}`,
+      'ngrok-skip-browser-warning': 'true'
+    }
+  };
+  if (data) opts.body = JSON.stringify(data);
+  const res = await fetch(url, opts);
+  return res.json();
+}
+
+async function agentHealth() {
+  try {
+    const res = await agentCall('/health');
+    return res.status === 'ok';
+  } catch(e) { return false; }
+}
+
+async function agentListProjects() {
+  return agentCall('/projects');
+}
+
+async function agentReadFile(path) {
+  return agentCall('/read-file', { path });
+}
+
+async function agentWriteFile(path, content) {
+  return agentCall('/write-file', { path, content });
+}
+
+async function agentRunCommand(command, cwd = null) {
+  return agentCall('/run-command', { command, cwd, timeout: 60 });
+}
+
+async function agentListDir(path) {
+  return agentCall('/list-dir', { path });
 }
 
 // ── API Anthropic ─────────────────────────────────────────────
@@ -484,10 +542,19 @@ btnClear.addEventListener('click', async () => {
 btnSettings.addEventListener('click', () => modalSettings.classList.remove('hidden'));
 modalClose.addEventListener('click', () => modalSettings.classList.add('hidden'));
 modalSettings.addEventListener('click', (e) => { if (e.target === modalSettings) modalSettings.classList.add('hidden'); });
-btnSaveKey.addEventListener('click', () => {
+btnSaveKey.addEventListener('click', async () => {
   const key = apiKeyInput.value.trim();
+  const agentUrl = document.getElementById('agent-url-input')?.value.trim().replace(/\/$/, '');
   if (key) {
     localStorage.setItem('pepper_api_key', key);
+    if (agentUrl) {
+      localStorage.setItem('pepper_agent_url', agentUrl);
+      AGENT_URL = agentUrl;
+      // Verificar conexión con agente
+      const ok = await agentHealth();
+      setStatus(ok ? 'agente conectado ✓' : 'agente no disponible');
+      setTimeout(() => setStatus('lista para ayudarte'), 3000);
+    }
     modalSettings.classList.add('hidden');
     if (messagesEl.querySelector('.notice')) { messagesEl.innerHTML = ''; init(); }
   }
@@ -498,6 +565,14 @@ window.addEventListener('beforeunload', () => { processAndSaveMemory(); });
 async function init() {
   if (!getApiKey()) { addNoKeyNotice(); setStatus('necesita configuración'); return; }
   apiKeyInput.value = getApiKey();
+  const savedAgentUrl = localStorage.getItem('pepper_agent_url');
+  if (savedAgentUrl) {
+    AGENT_URL = savedAgentUrl;
+    const agentInput = document.getElementById('agent-url-input');
+    if (agentInput) agentInput.value = savedAgentUrl;
+    const ok = await agentHealth();
+    if (ok) setStatus('agente conectado ✓');
+  }
   setStatus('cargando memoria...');
   memoryCache = await loadMemory();
   const nombre = memoryCache.nombre || '';
