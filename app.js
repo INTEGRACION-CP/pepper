@@ -1,24 +1,24 @@
+// ── Configuración ─────────────────────────────────────────────
 const SUPABASE_URL = 'https://bhwfgbdgrdzrrrzxwihg.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJod2ZnYmRncmR6cnJyenh3aWhnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEyMDgyNTUsImV4cCI6MjA5Njc4NDI1NX0.oeIVLL30O6vXbvFcns-mtHcuRxZium-SrMmz3lkTi9o';
 const USER_ID = 'dade339f-6c98-416c-ab50-03af40905ce2';
 
-const SYSTEM_PROMPT = `Sos PEPPER (Personalized & Efficient Personal Assistant with Enhanced Reasoning), una IA asistente creada para ayudar a tu usuario a desarrollar proyectos que mejoren la vida de las personas.
+const SYSTEM_PROMPT = `Sos PEPPER (Personalized & Efficient Personal Assistant with Enhanced Reasoning).
+Tu misión: ayudar a Matías a desarrollar proyectos que mejoren la vida de las personas.
 
-Tu personalidad:
-- Hablás en español rioplatense, de manera clara, cálida y directa
-- Sos proactiva: si ves soluciones que el usuario no ve, las proponés
-- Siempre recordás que el usuario decide: vos proponés, él aprueba con OK o NO OK
-- Evaluás riesgos antes de actuar y los comunicás con honestidad
-- Sos concisa: máximo 3-4 oraciones antes de una propuesta
-- Cuando mostrás código, siempre usá bloques con triple backtick y el lenguaje
+Personalidad:
+- Hablás en español rioplatense, directo y cálido
+- Proactiva: proponés soluciones que Matías no ve
+- Matías decide siempre: vos proponés, él aprueba con OK o NO OK
+- Evaluás riesgos antes de actuar
+- Cuando mostrás código, usás bloques con triple backtick y el lenguaje
 
-Tu flujo de trabajo:
-1. Al iniciar revisás la memoria disponible para recordar el contexto del usuario
-2. Recibís la necesidad del usuario
-3. La interpretás y comparás con mejores prácticas y benchmarks reales
-4. Si es una tarea concreta, generás una PROPUESTA estructurada
-5. Esperás el OK del usuario antes de continuar
-6. Si algo puede dañar a alguien, no avanzás y lo comunicás claramente
+Flujo:
+1. Cargás memoria al iniciar para conocer el contexto
+2. Recibís la necesidad, la analizás
+3. Si es tarea concreta, generás PROPUESTA estructurada
+4. Esperás OK antes de continuar
+5. Si algo puede dañar a alguien, no avanzás
 
 Formato de propuesta:
 [PROPUESTA]
@@ -27,20 +27,24 @@ pasos: (pasos separados por |)
 riesgo: (bajo|medio|alto — descripción)
 [/PROPUESTA]`;
 
+// ── Estado ────────────────────────────────────────────────────
 let conversationHistory = [];
+let currentSessionMessages = [];
+let memoryCache = null;
 let attachedFile = null;
 let isListening = false;
 let recognition = null;
-let currentSessionMessages = [];
-let memoryCache = null;
 
+// ── DOM ───────────────────────────────────────────────────────
 const messagesEl = document.getElementById('messages');
 const inputEl = document.getElementById('user-input');
+const statusEl = document.getElementById('status-text');
 const btnSend = document.getElementById('btn-send');
 const btnVoice = document.getElementById('btn-voice');
 const btnFile = document.getElementById('btn-file');
 const fileInput = document.getElementById('file-input');
 const btnClear = document.getElementById('btn-clear');
+const btnSave = document.getElementById('btn-save');
 const btnSettings = document.getElementById('btn-settings');
 const modalSettings = document.getElementById('modal-settings');
 const modalClose = document.getElementById('modal-close');
@@ -48,72 +52,73 @@ const apiKeyInput = document.getElementById('api-key-input');
 const btnSaveKey = document.getElementById('btn-save-key');
 
 function getApiKey() { return localStorage.getItem('pepper_api_key') || ''; }
+function setStatus(text) { if (statusEl) statusEl.textContent = text; }
 
 // ── Supabase ──────────────────────────────────────────────────
-
 async function sbGet(clave) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/memoria?clave=eq.${clave}&select=valor`, {
-    headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
-  });
-  if (!res.ok) return null;
-  const data = await res.json();
-  return data.length > 0 ? data[0].valor : null;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/memoria?clave=eq.${clave}&select=valor`, {
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.length > 0 ? data[0].valor : null;
+  } catch(e) { return null; }
 }
 
 async function sbSet(clave, valor) {
-  // Intentar UPDATE primero
-  const updateRes = await fetch(`${SUPABASE_URL}/rest/v1/memoria?clave=eq.${clave}`, {
-    method: 'PATCH',
-    headers: {
-      'apikey': SUPABASE_KEY,
-      'Authorization': `Bearer ${SUPABASE_KEY}`,
-      'Content-Type': 'application/json',
-      'Prefer': 'return=minimal'
-    },
-    body: JSON.stringify({ valor, actualizado_at: new Date().toISOString() })
-  });
-  // Si no existia, hacer INSERT
-  if (updateRes.status === 404 || updateRes.headers.get('content-range') === '*/0') {
-    await fetch(`${SUPABASE_URL}/rest/v1/memoria`, {
-      method: 'POST',
+  try {
+    // Intentar actualizar primero
+    const patch = await fetch(`${SUPABASE_URL}/rest/v1/memoria?clave=eq.${clave}`, {
+      method: 'PATCH',
       headers: {
         'apikey': SUPABASE_KEY,
         'Authorization': `Bearer ${SUPABASE_KEY}`,
         'Content-Type': 'application/json',
         'Prefer': 'return=minimal'
       },
-      body: JSON.stringify({ clave, valor, actualizado_at: new Date().toISOString() })
+      body: JSON.stringify({ valor, actualizado_at: new Date().toISOString() })
     });
-  }
-}
-
-async function saveDecision(contexto, propuesta, respuesta) {
-  try {
-    await fetch('/api/save-decision', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: USER_ID, contexto, propuesta, respuesta, reasoning: '' })
-    });
-  } catch(e) { console.error('Error guardando decision:', e); }
+    // Si no existía, insertar
+    const range = patch.headers.get('content-range');
+    if (range === '*/0' || patch.status === 404) {
+      await fetch(`${SUPABASE_URL}/rest/v1/memoria`, {
+        method: 'POST',
+        headers: {
+          'apikey': SUPABASE_KEY,
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal'
+        },
+        body: JSON.stringify({ clave, valor, actualizado_at: new Date().toISOString() })
+      });
+    }
+  } catch(e) { console.error('Error sbSet:', e); }
 }
 
 // ── Memoria ───────────────────────────────────────────────────
-
 async function loadMemory() {
   try {
     const data = await sbGet('memoria_principal');
-    return data || { proyectos: [], conversaciones: [], perfil: {} };
-  } catch (e) {
-    return { proyectos: [], conversaciones: [], perfil: {} };
+    return data || { nombre: null, pais: null, ocupacion: null, contexto: null, proyectos: '', aprendizajes: '', conversaciones: [] };
+  } catch(e) {
+    return { nombre: null, pais: null, ocupacion: null, contexto: null, proyectos: '', aprendizajes: '', conversaciones: [] };
   }
 }
 
-async function extractMemoryWithClaude(messages, currentMemory) {
+// Extrae memoria usando texto plano — robusto, sin JSON
+async function extractMemory(messages, currentMemory) {
   const apiKey = getApiKey();
   if (!apiKey || messages.length === 0) return currentMemory;
 
-  const conversationText = messages.map(m => `${m.rol.toUpperCase()}: ${m.mensaje}`).join('\n');
-  const currentMemoryText = JSON.stringify(currentMemory, null, 2);
+  const texto = messages.map(m => `${m.rol.toUpperCase()}: ${m.mensaje}`).join('\n');
+  const memoriaActual = `
+NOMBRE: ${currentMemory.nombre || 'desconocido'}
+PAIS: ${currentMemory.pais || 'desconocido'}
+OCUPACION: ${currentMemory.ocupacion || 'desconocido'}
+CONTEXTO: ${currentMemory.contexto || 'ninguno'}
+PROYECTOS: ${currentMemory.proyectos || 'ninguno'}
+APRENDIZAJES: ${currentMemory.aprendizajes || 'ninguno'}`.trim();
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -125,38 +130,19 @@ async function extractMemoryWithClaude(messages, currentMemory) {
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-5',
-      max_tokens: 4000,
-      system: `Sos un extractor de memoria para PEPPER, un asistente de IA personal.
-Tu tarea es analizar una conversación y actualizar la memoria estructurada del usuario.
-Devolvé SOLO un JSON válido con esta estructura exacta, sin texto adicional:
-{
-  "perfil": {
-    "nombre": "string o null",
-    "ocupacion": "string o null", 
-    "contexto": "string o null",
-    "preferencias": "string o null"
-  },
-  "proyectos": [
-    {
-      "nombre": "string",
-      "descripcion": "string",
-      "estado": "activo|pausado|completado",
-      "detalles": "string"
-    }
-  ],
-  "conversaciones": [
-    {
-      "fecha": "ISO date string",
-      "resumen": "resumen detallado de 2-3 oraciones de lo más importante",
-      "temas": ["tema1", "tema2"]
-    }
-  ],
-  "aprendizajes": ["cosa importante 1", "cosa importante 2"]
-}
-Mantené toda la información existente y agregá/actualizá con lo nuevo de la conversación.`,
+      max_tokens: 1000,
+      system: `Sos un extractor de memoria. Analizás conversaciones y actualizás un perfil estructurado.
+Devolvé ÚNICAMENTE el perfil actualizado en este formato exacto (una línea por campo, sin explicaciones):
+NOMBRE: [nombre]
+PAIS: [país]
+OCUPACION: [ocupación]
+CONTEXTO: [descripción breve del contexto de trabajo]
+PROYECTOS: [proyecto1 (estado) | proyecto2 (estado) | ...]
+APRENDIZAJES: [dato importante 1 | dato importante 2 | ...]
+RESUMEN_SESION: [resumen de 2 oraciones de esta conversación]`,
       messages: [{
         role: 'user',
-        content: `MEMORIA ACTUAL:\n${currentMemoryText}\n\nCONVERSACIÓN A ANALIZAR:\n${conversationText}\n\nActualizá la memoria con la información de esta conversación.`
+        content: `MEMORIA ACTUAL:\n${memoriaActual}\n\nCONVERSACIÓN:\n${texto}\n\nActualizá la memoria con la información nueva.`
       }]
     })
   });
@@ -165,130 +151,75 @@ Mantené toda la información existente y agregá/actualizá con lo nuevo de la 
 
   const data = await response.json();
   const text = data.content.map(b => b.text || '').join('').trim();
-  
-  try {
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (jsonMatch) return JSON.parse(jsonMatch[0]);
-  } catch(e) { console.error('Error parsing memory:', e); }
-  
-  return currentMemory;
-}
 
-async function saveCurrentSession(memory) {
-  if (currentSessionMessages.length === 0) return;
-  try {
-    const updatedMemory = await extractMemoryWithClaude(currentSessionMessages, memory);
-    await sbSet('memoria_principal', updatedMemory);
-    memoryCache = updatedMemory;
-  } catch(e) {
-    console.error('Error guardando sesion:', e);
-    // Fallback: guardar resumen básico
-    const session = {
-      fecha: new Date().toISOString(),
-      resumen: currentSessionMessages.slice(0, 2).map(m => m.mensaje).join(' | ').substring(0, 300),
-      mensajes: currentSessionMessages
-    };
-    memory.conversaciones = memory.conversaciones || [];
-    memory.conversaciones.unshift(session);
-    if (memory.conversaciones.length > 20) memory.conversaciones = memory.conversaciones.slice(0, 20);
-    await sbSet('memoria_principal', memory);
+  // Parser robusto — nunca falla
+  const parsed = { ...currentMemory };
+  const lineas = text.split('\n');
+  for (const linea of lineas) {
+    const idx = linea.indexOf(':');
+    if (idx === -1) continue;
+    const clave = linea.substring(0, idx).trim().toUpperCase();
+    const valor = linea.substring(idx + 1).trim();
+    if (!valor || valor === 'desconocido' || valor === 'ninguno') continue;
+    switch(clave) {
+      case 'NOMBRE': parsed.nombre = valor; break;
+      case 'PAIS': parsed.pais = valor; break;
+      case 'OCUPACION': parsed.ocupacion = valor; break;
+      case 'CONTEXTO': parsed.contexto = valor; break;
+      case 'PROYECTOS': parsed.proyectos = valor; break;
+      case 'APRENDIZAJES': parsed.aprendizajes = valor; break;
+      case 'RESUMEN_SESION':
+        parsed.conversaciones = parsed.conversaciones || [];
+        parsed.conversaciones.unshift({ fecha: new Date().toISOString().split('T')[0], resumen: valor });
+        if (parsed.conversaciones.length > 10) parsed.conversaciones = parsed.conversaciones.slice(0, 10);
+        break;
+    }
   }
+  return parsed;
 }
 
 function buildMemoryContext(memory) {
+  if (!memory) return '';
   const partes = [];
-  
-  // Perfil del usuario
-  if (memory.perfil && Object.keys(memory.perfil).length > 0) {
-    const p = memory.perfil;
-    const perfilTexto = Object.entries(p)
-      .filter(([k, v]) => v)
-      .map(([k, v]) => `- ${k}: ${v}`)
-      .join('\n');
-    if (perfilTexto) partes.push('PERFIL DEL USUARIO:\n' + perfilTexto);
-  }
-
-  // Proyectos
-  if (memory.proyectos && memory.proyectos.length > 0) {
-    const proyectosTexto = memory.proyectos.map(p => 
-      `- ${p.nombre} (${p.estado}): ${p.descripcion || ''}${p.detalles ? ' — ' + p.detalles : ''}`
-    ).join('\n');
-    partes.push('PROYECTOS:\n' + proyectosTexto);
-  }
-
-  // Aprendizajes
-  if (memory.aprendizajes && memory.aprendizajes.length > 0) {
-    partes.push('LO QUE SÉ DEL USUARIO:\n' + memory.aprendizajes.map(a => `- ${a}`).join('\n'));
-  }
-
-  // Conversaciones recientes
+  if (memory.nombre) partes.push(`Nombre: ${memory.nombre}`);
+  if (memory.pais) partes.push(`País: ${memory.pais}`);
+  if (memory.ocupacion) partes.push(`Ocupación: ${memory.ocupacion}`);
+  if (memory.contexto) partes.push(`Contexto: ${memory.contexto}`);
+  if (memory.proyectos) partes.push(`Proyectos: ${memory.proyectos}`);
+  if (memory.aprendizajes) partes.push(`Aprendizajes: ${memory.aprendizajes}`);
   if (memory.conversaciones && memory.conversaciones.length > 0) {
-    const ultimas = memory.conversaciones.slice(0, 3);
-    partes.push('CONVERSACIONES RECIENTES:\n' + ultimas.map(c => 
-      `- ${c.fecha ? c.fecha.split('T')[0] : 'reciente'}: ${c.resumen}`
-    ).join('\n'));
+    const ultimas = memory.conversaciones.slice(0, 3).map(c => `- ${c.fecha}: ${c.resumen}`).join('\n');
+    partes.push(`Conversaciones recientes:\n${ultimas}`);
   }
-
   if (partes.length === 0) return '';
-  return '\n\n[MEMORIA PERSISTENTE — usá esta información para personalizar tus respuestas]\n' + partes.join('\n\n');
+  return '\n\n[MEMORIA DE MATÍAS]\n' + partes.join('\n');
 }
 
-// ── Render ────────────────────────────────────────────────────
-
-function escapeHtml(str) {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-function renderMarkdown(text) {
-  // Primero escapamos el HTML del texto completo excepto los bloques de código
-  let parts = [];
-  let lastIndex = 0;
-  // Regex para bloques de código
-  const codeBlockRegex = /```([a-zA-Z0-9]*)\n?([\s\S]*?)```/g;
-  let match;
-  
-  while ((match = codeBlockRegex.exec(text)) !== null) {
-    // Texto antes del bloque de código
-    if (match.index > lastIndex) {
-      let chunk = escapeHtml(text.slice(lastIndex, match.index));
-      chunk = chunk.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-      chunk = chunk.replace(/`([^`]+)`/g, '<code>$1</code>');
-      chunk = chunk.replace(/\n/g, '<br>');
-      parts.push(chunk);
-    }
-    // Bloque de código
-    const lang = match[1] || 'plaintext';
-    const code = escapeHtml(match[2].trim());
-    parts.push(`<pre><code class="language-${lang}">${code}</code></pre>`);
-    lastIndex = match.index + match[0].length;
+async function processAndSaveMemory() {
+  if (currentSessionMessages.length === 0) return;
+  setStatus('procesando memoria...');
+  try {
+    const memory = memoryCache || await loadMemory();
+    const updated = await extractMemory(currentSessionMessages, memory);
+    await sbSet('memoria_principal', updated);
+    memoryCache = updated;
+    setStatus('memoria guardada ✓');
+    setTimeout(() => setStatus('lista para ayudarte'), 2000);
+  } catch(e) {
+    console.error('Error procesando memoria:', e);
+    setStatus('lista para ayudarte');
   }
-  
-  // Resto del texto después del último bloque
-  if (lastIndex < text.length) {
-    let chunk = escapeHtml(text.slice(lastIndex));
-    chunk = chunk.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    chunk = chunk.replace(/`([^`]+)`/g, '<code>$1</code>');
-    chunk = chunk.replace(/\n/g, '<br>');
-    parts.push(chunk);
-  }
-  
-  return parts.join('');
 }
 
-// ── API ───────────────────────────────────────────────────────
-
+// ── API Anthropic ─────────────────────────────────────────────
 async function callPepper(userMessage) {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error('NO_KEY');
 
   conversationHistory.push({ role: 'user', content: userMessage });
-  currentSessionMessages.push({ rol: 'usuario', mensaje: userMessage, hora: new Date().toISOString() });
+  currentSessionMessages.push({ rol: 'usuario', mensaje: userMessage });
 
-  const systemWithMemory = SYSTEM_PROMPT + buildMemoryContext(memoryCache || {});
+  const system = SYSTEM_PROMPT + buildMemoryContext(memoryCache);
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -301,7 +232,7 @@ async function callPepper(userMessage) {
     body: JSON.stringify({
       model: 'claude-sonnet-4-5',
       max_tokens: 1500,
-      system: systemWithMemory,
+      system,
       messages: conversationHistory
     })
   });
@@ -314,24 +245,40 @@ async function callPepper(userMessage) {
   const data = await response.json();
   const text = data.content.map(b => b.text || '').join('');
   conversationHistory.push({ role: 'assistant', content: text });
-  currentSessionMessages.push({ rol: 'pepper', mensaje: text, hora: new Date().toISOString() });
+  currentSessionMessages.push({ rol: 'pepper', mensaje: text });
   return text;
 }
 
-// ── UI ────────────────────────────────────────────────────────
+// ── Render ────────────────────────────────────────────────────
+function escapeHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 
-function parseResponse(text) {
-  const propMatch = text.match(/\[PROPUESTA\]([\s\S]*?)\[\/PROPUESTA\]/);
-  const cleanText = text.replace(/\[PROPUESTA\][\s\S]*?\[\/PROPUESTA\]/, '').trim();
-  let proposal = null;
-  if (propMatch) {
-    const raw = propMatch[1];
-    const titulo = (raw.match(/título:\s*(.+)/) || [])[1]?.trim() || 'Propuesta';
-    const pasos = (raw.match(/pasos:\s*(.+)/) || [])[1]?.trim().split('|').map(s => s.trim()).filter(Boolean) || [];
-    const riesgo = (raw.match(/riesgo:\s*(.+)/) || [])[1]?.trim() || 'bajo';
-    proposal = { titulo, pasos, riesgo };
+function renderMarkdown(text) {
+  const parts = [];
+  let lastIndex = 0;
+  const codeBlockRegex = /```([a-zA-Z0-9]*)\n?([\s\S]*?)```/g;
+  let match;
+  while ((match = codeBlockRegex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      let chunk = escapeHtml(text.slice(lastIndex, match.index));
+      chunk = chunk.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      chunk = chunk.replace(/`([^`]+)`/g, '<code>$1</code>');
+      chunk = chunk.replace(/\n/g, '<br>');
+      parts.push(chunk);
+    }
+    const lang = match[1] || 'plaintext';
+    parts.push(`<pre><code class="language-${lang}">${escapeHtml(match[2].trim())}</code></pre>`);
+    lastIndex = match.index + match[0].length;
   }
-  return { cleanText, proposal };
+  if (lastIndex < text.length) {
+    let chunk = escapeHtml(text.slice(lastIndex));
+    chunk = chunk.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    chunk = chunk.replace(/`([^`]+)`/g, '<code>$1</code>');
+    chunk = chunk.replace(/\n/g, '<br>');
+    parts.push(chunk);
+  }
+  return parts.join('');
 }
 
 function addMessage(role, text, proposal = null, fileName = null) {
@@ -344,7 +291,6 @@ function addMessage(role, text, proposal = null, fileName = null) {
   body.style.cssText = 'display:flex;flex-direction:column;min-width:0;';
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
-  
   if (role === 'pepper') {
     bubble.innerHTML = renderMarkdown(text);
     setTimeout(() => {
@@ -355,7 +301,6 @@ function addMessage(role, text, proposal = null, fileName = null) {
   } else {
     bubble.textContent = text;
   }
-
   if (fileName) {
     const badge = document.createElement('div');
     badge.className = 'file-badge';
@@ -371,8 +316,7 @@ function addMessage(role, text, proposal = null, fileName = null) {
 }
 
 function buildProposalCard(proposal) {
-  const riskColor = proposal.riesgo.startsWith('bajo') ? '#1D9E75'
-    : proposal.riesgo.startsWith('alto') ? '#E24B4A' : '#BA7517';
+  const riskColor = proposal.riesgo.startsWith('bajo') ? '#1D9E75' : proposal.riesgo.startsWith('alto') ? '#E24B4A' : '#BA7517';
   const card = document.createElement('div');
   card.className = 'proposal-card';
   const title = document.createElement('div');
@@ -404,6 +348,20 @@ function buildProposalCard(proposal) {
   return card;
 }
 
+function parseResponse(text) {
+  const propMatch = text.match(/\[PROPUESTA\]([\s\S]*?)\[\/PROPUESTA\]/);
+  const cleanText = text.replace(/\[PROPUESTA\][\s\S]*?\[\/PROPUESTA\]/, '').trim();
+  let proposal = null;
+  if (propMatch) {
+    const raw = propMatch[1];
+    const titulo = (raw.match(/título:\s*(.+)/) || [])[1]?.trim() || 'Propuesta';
+    const pasos = (raw.match(/pasos:\s*(.+)/) || [])[1]?.trim().split('|').map(s => s.trim()).filter(Boolean) || [];
+    const riesgo = (raw.match(/riesgo:\s*(.+)/) || [])[1]?.trim() || 'bajo';
+    proposal = { titulo, pasos, riesgo };
+  }
+  return { cleanText, proposal };
+}
+
 function addTyping() {
   const wrap = document.createElement('div');
   wrap.className = 'msg pepper';
@@ -412,37 +370,29 @@ function addTyping() {
   messagesEl.appendChild(wrap);
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
-
 function removeTyping() { document.getElementById('typing-indicator')?.remove(); }
-
-function showWelcome(memory) {
-  const proyectos = (memory.proyectos || []).filter(p => p.estado === 'activo');
-  const conversaciones = memory.conversaciones || [];
-  let msg = 'Hola! Soy PEPPER. Contame qué necesitás resolver hoy y lo analizamos juntos.';
-  if (conversaciones.length > 0 || proyectos.length > 0) {
-    const proyectosActivos = proyectos.length > 0 ? ` Tengo ${proyectos.length} proyecto(s) activo(s): ${proyectos.map(p => p.nombre).join(', ')}.` : '';
-    msg = `Hola de nuevo Matías.${proyectosActivos} ¿En qué te ayudo hoy?`;
-  }
-  addMessage('pepper', msg);
-}
 
 function addNoKeyNotice() {
   const wrap = document.createElement('div');
   wrap.className = 'msg pepper';
-  wrap.innerHTML = `<div class="msg-av">P</div><div><div class="notice"><i class="ti ti-key"></i><div>Para activarme necesitás configurar tu API Key de Anthropic. Hacé clic en el ícono <strong>⚙</strong> arriba a la derecha.</div></div></div>`;
+  wrap.innerHTML = `<div class="msg-av">P</div><div><div class="notice"><i class="ti ti-key"></i><div>Para activarme necesitás configurar tu API Key de Anthropic. Hacé clic en <strong>⚙</strong> arriba a la derecha.</div></div></div>`;
   messagesEl.appendChild(wrap);
 }
 
+// ── Handlers ──────────────────────────────────────────────────
 async function handleDecision(decision, titulo, actionsEl) {
   actionsEl.innerHTML = decision === 'ok'
     ? `<span style="color:#1D9E75;font-size:13px;display:flex;align-items:center;gap:5px"><i class="ti ti-check"></i>Aprobado</span>`
     : `<span style="color:#E24B4A;font-size:13px;display:flex;align-items:center;gap:5px"><i class="ti ti-x"></i>Buscando alternativa...</span>`;
-  
-  await saveDecision(titulo, titulo, decision === 'ok' ? 'OK' : 'NO OK');
-  
-  const msg = decision === 'ok'
-    ? `OK, adelante con: ${titulo}`
-    : `NO OK para: ${titulo}. Por favor buscá una alternativa diferente.`;
+
+  // Guardar decisión en Supabase
+  fetch('/api/save-decision', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: USER_ID, contexto: titulo, propuesta: titulo, respuesta: decision === 'ok' ? 'OK' : 'NO OK' })
+  }).catch(() => {});
+
+  const msg = decision === 'ok' ? `OK, adelante con: ${titulo}` : `NO OK para: ${titulo}. Buscá una alternativa.`;
   addMessage('user', decision === 'ok' ? 'OK — adelante' : 'NO OK — buscá otra alternativa');
   addTyping();
   try {
@@ -451,7 +401,7 @@ async function handleDecision(decision, titulo, actionsEl) {
     const { cleanText, proposal } = parseResponse(reply);
     addMessage('pepper', cleanText, proposal);
     speakText(cleanText);
-  } catch (e) {
+  } catch(e) {
     removeTyping();
     addMessage('pepper', handleError(e));
   }
@@ -474,11 +424,7 @@ async function sendMessage() {
     const { cleanText, proposal } = parseResponse(reply);
     addMessage('pepper', cleanText, proposal);
     speakText(cleanText);
-    // Autoguardado después de cada respuesta
-    const memory = memoryCache || await loadMemory();
-    await saveCurrentSession(memory);
-    memoryCache = memory;
-  } catch (e) {
+  } catch(e) {
     removeTyping();
     addMessage('pepper', handleError(e));
   }
@@ -515,7 +461,7 @@ function startVoice() {
   recognition.start();
 }
 
-// Events
+// ── Eventos ───────────────────────────────────────────────────
 btnSend.addEventListener('click', sendMessage);
 btnVoice.addEventListener('click', () => { isListening ? recognition?.stop() : startVoice(); });
 fileInput.addEventListener('change', (e) => {
@@ -529,14 +475,17 @@ inputEl.addEventListener('input', () => {
   inputEl.style.height = 'auto';
   inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';
 });
+btnSave.addEventListener('click', async () => {
+  await processAndSaveMemory();
+});
 btnClear.addEventListener('click', async () => {
-  const memory = memoryCache || await loadMemory();
-  await saveCurrentSession(memory);
-  memoryCache = memory;
+  await processAndSaveMemory();
   conversationHistory = [];
   currentSessionMessages = [];
   messagesEl.innerHTML = '';
-  showWelcome(memory);
+  const memory = memoryCache || {};
+  const nombre = memory.nombre || 'Matías';
+  addMessage('pepper', `Listo ${nombre}, empezamos una nueva conversación. ¿En qué te ayudo?`);
 });
 btnSettings.addEventListener('click', () => modalSettings.classList.remove('hidden'));
 modalClose.addEventListener('click', () => modalSettings.classList.add('hidden'));
@@ -546,22 +495,23 @@ btnSaveKey.addEventListener('click', () => {
   if (key) {
     localStorage.setItem('pepper_api_key', key);
     modalSettings.classList.add('hidden');
-    if (messagesEl.querySelector('.notice')) { messagesEl.innerHTML = ''; showWelcome(memoryCache || {}); }
+    if (messagesEl.querySelector('.notice')) { messagesEl.innerHTML = ''; init(); }
   }
 });
+window.addEventListener('beforeunload', () => { processAndSaveMemory(); });
 
-window.addEventListener('beforeunload', async () => {
-  const memory = memoryCache || await loadMemory();
-  await saveCurrentSession(memory);
-});
-
+// ── Init ──────────────────────────────────────────────────────
 async function init() {
-  if (!getApiKey()) { addNoKeyNotice(); return; }
+  if (!getApiKey()) { addNoKeyNotice(); setStatus('necesita configuración'); return; }
   apiKeyInput.value = getApiKey();
-  addMessage('pepper', 'Cargando memoria...');
+  setStatus('cargando memoria...');
   memoryCache = await loadMemory();
-  messagesEl.innerHTML = '';
-  showWelcome(memoryCache);
+  const nombre = memoryCache.nombre || '';
+  setStatus('lista para ayudarte');
+  const saludo = nombre
+    ? `Hola ${nombre}! ¿En qué te ayudo hoy?`
+    : 'Hola! Soy PEPPER. Contame qué necesitás resolver hoy.';
+  addMessage('pepper', saludo);
 }
 
 window.speechSynthesis?.getVoices();

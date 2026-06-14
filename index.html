@@ -7,9 +7,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css" />
-  <link rel="stylesheet" href="style.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs2015.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div id="app">
@@ -18,10 +18,11 @@
         <div class="avatar">P</div>
         <div class="header-info">
           <span class="header-name">PEPPER</span>
-          <span class="header-status"><span class="dot"></span>lista para ayudarte</span>
+          <span class="header-status"><span class="dot"></span><span id="status-text">iniciando...</span></span>
         </div>
       </div>
       <div class="header-right">
+        <button id="btn-save" title="Guardar y procesar memoria"><i class="ti ti-brain"></i></button>
         <button id="btn-clear" title="Nueva conversación"><i class="ti ti-refresh"></i></button>
         <button id="btn-settings" title="Configuración"><i class="ti ti-settings"></i></button>
       </div>
@@ -40,7 +41,6 @@
     </div>
   </div>
 
-  <!-- Settings Modal -->
   <div id="modal-settings" class="modal-overlay hidden">
     <div class="modal">
       <div class="modal-header">
@@ -50,7 +50,7 @@
       <div class="modal-body">
         <label class="field-label">API Key de Anthropic</label>
         <input type="password" id="api-key-input" placeholder="sk-ant-..." />
-        <p class="field-hint">Tus claves se guardan solo en este dispositivo, nunca se envían a ningún servidor externo.</p>
+        <p class="field-hint">Tu clave se guarda solo en este dispositivo.</p>
         <button id="btn-save-key" class="btn-primary">Guardar</button>
       </div>
     </div>

@@ -1,59 +1,21 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>PEPPER — Tu asistente personal</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css" />
-  <link rel="stylesheet" href="style.css" />
-</head>
-<body>
-  <div id="app">
-    <header id="header">
-      <div class="header-left">
-        <div class="avatar">P</div>
-        <div class="header-info">
-          <span class="header-name">PEPPER</span>
-          <span class="header-status"><span class="dot"></span>lista para ayudarte</span>
-        </div>
-      </div>
-      <div class="header-right">
-        <button id="btn-clear" title="Nueva conversación"><i class="ti ti-refresh"></i></button>
-        <button id="btn-settings" title="Configuración"><i class="ti ti-settings"></i></button>
-      </div>
-    </header>
+# PEPPER v2.0
+**Personalized & Efficient Personal Assistant with Enhanced Reasoning**
 
-    <div id="messages"></div>
+URL: https://icp-pepper.vercel.app
 
-    <div id="input-area">
-      <label id="btn-file" title="Adjuntar archivo">
-        <i class="ti ti-paperclip"></i>
-        <input type="file" id="file-input" accept=".pdf,.doc,.docx,.txt,.csv,.xlsx,.png,.jpg" />
-      </label>
-      <textarea id="user-input" rows="1" placeholder="Contale a PEPPER qué necesitás resolver..."></textarea>
-      <button id="btn-voice" title="Hablar con PEPPER"><i class="ti ti-microphone"></i></button>
-      <button id="btn-send" title="Enviar"><i class="ti ti-arrow-up"></i></button>
-    </div>
-  </div>
+## Stack
+- Frontend: HTML + CSS + JS puro
+- Cerebro: Claude Sonnet (Anthropic API)
+- Memoria: Supabase (texto plano, sin JSON complejo)
+- Deploy: Vercel
+- Código: GitHub INTEGRACION-CP/pepper
 
-  <!-- Settings Modal -->
-  <div id="modal-settings" class="modal-overlay hidden">
-    <div class="modal">
-      <div class="modal-header">
-        <span>Configuración</span>
-        <button id="modal-close"><i class="ti ti-x"></i></button>
-      </div>
-      <div class="modal-body">
-        <label class="field-label">API Key de Anthropic</label>
-        <input type="password" id="api-key-input" placeholder="sk-ant-..." />
-        <p class="field-hint">Tu clave se guarda solo en este dispositivo, nunca se envía a ningún servidor.</p>
-        <button id="btn-save-key" class="btn-primary">Guardar</button>
-      </div>
-    </div>
-  </div>
-
-  <script src="app.js"></script>
-</body>
-</html>
+## Estructura
+pepper/
+├── index.html
+├── style.css  
+├── app.js
+├── vercel.json
+├── package.json
+└── api/
+    └── save-decision.js
