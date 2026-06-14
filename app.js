@@ -14,6 +14,10 @@ Personalidad:
 - Matías decide siempre: vos proponés, él aprueba con OK o NO OK
 - Evaluás riesgos antes de actuar
 - Cuando mostrás código, usás bloques con triple backtick y el lenguaje
+- NUNCA digas que hiciste algo si no tenés confirmación real de que funcionó
+- Si no sabés algo, decilo directamente — nunca inventes ni rellenes con información falsa
+- Si un comando falla o no podés confirmar el resultado, reportalo exactamente antes de continuar
+- La honestidad total es tu principio más importante — más que parecer competente
 
 Flujo:
 1. Cargás memoria al iniciar para conocer el contexto
@@ -29,12 +33,20 @@ pasos: (pasos separados por |)
 riesgo: (bajo|medio|alto — descripción)
 [/PROPUESTA]
 
-Cuando el agente local esté conectado podés:
-- Leer archivos del proyecto
-- Ejecutar comandos Python
-- Listar directorios
-- Escribir y modificar código
-Siempre pedí OK antes de escribir o ejecutar algo.`;
+CAPACIDADES REALES DEL AGENTE LOCAL:
+Cuando el agente está conectado, usá estos tags para interactuar con el sistema:
+- Para listar carpeta: <list_directory><path>RUTA</path></list_directory>
+- Para leer archivo: <read_file><path>RUTA</path></read_file>
+- Para escribir archivo: <write_file><path>RUTA</path><content>CONTENIDO</content></write_file>
+- Para ejecutar comando: <run_command><cmd>COMANDO</cmd><cwd>CARPETA</cwd></run_command>
+
+REGLAS CRÍTICAS:
+1. Usá SIEMPRE estos tags — nunca asumas que algo pasó sin usarlos
+2. Después de cada acción esperá el resultado real antes de continuar
+3. Si el resultado muestra error, reportalo exactamente
+4. NUNCA inventes resultados
+5. Para crear carpetas: <run_command><cmd>mkdir CARPETA</cmd><cwd>RUTA_PADRE</cwd></run_command>
+6. Para eliminar archivos pedí confirmación a Matías primero`;
 
 // ── Estado ────────────────────────────────────────────────────
 let conversationHistory = [];
@@ -66,8 +78,8 @@ function setStatus(text) { if (statusEl) statusEl.textContent = text; }
 // ── Supabase ──────────────────────────────────────────────────
 async function sbGet(clave) {
   try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/memoria?clave=eq.${clave}&select=valor`, {
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+    const res = await fetch(SUPABASE_URL + '/rest/v1/memoria?clave=eq.' + clave + '&select=valor', {
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY }
     });
     if (!res.ok) return null;
     const data = await res.json();
@@ -77,26 +89,104 @@ async function sbGet(clave) {
 
 async function sbSet(clave, valor) {
   try {
-    // Borrar si existe
-    await fetch(`${SUPABASE_URL}/rest/v1/memoria?clave=eq.${encodeURIComponent(clave)}`, {
+    await fetch(SUPABASE_URL + '/rest/v1/memoria?clave=eq.' + encodeURIComponent(clave), {
       method: 'DELETE',
-      headers: {
-        'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${SUPABASE_KEY}`
-      }
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY }
     });
-    // Insertar nuevo
-    await fetch(`${SUPABASE_URL}/rest/v1/memoria`, {
+    await fetch(SUPABASE_URL + '/rest/v1/memoria', {
       method: 'POST',
       headers: {
         'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Authorization': 'Bearer ' + SUPABASE_KEY,
         'Content-Type': 'application/json',
         'Prefer': 'return=minimal'
       },
-      body: JSON.stringify({ clave, valor, actualizado_at: new Date().toISOString() })
+      body: JSON.stringify({ clave: clave, valor: valor, actualizado_at: new Date().toISOString() })
     });
   } catch(e) { console.error('Error sbSet:', e); }
+}
+
+// ── Agente Local ──────────────────────────────────────────────
+async function agentCall(endpoint, data) {
+  if (!AGENT_URL) throw new Error('Agente no configurado');
+  const opts = {
+    method: data ? 'POST' : 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + AGENT_SECRET,
+      'ngrok-skip-browser-warning': 'true'
+    }
+  };
+  if (data) opts.body = JSON.stringify(data);
+  const res = await fetch(AGENT_URL + endpoint, opts);
+  return res.json();
+}
+
+async function agentHealth() {
+  try {
+    const res = await agentCall('/health');
+    return res.status === 'ok';
+  } catch(e) { return false; }
+}
+
+async function agentListDir(path) { return agentCall('/list-dir', { path: path }); }
+async function agentReadFile(path) { return agentCall('/read-file', { path: path }); }
+async function agentWriteFile(path, content) { return agentCall('/write-file', { path: path, content: content }); }
+async function agentRunCommand(cmd, cwd) { return agentCall('/run-command', { command: cmd, cwd: cwd || null, timeout: 60 }); }
+
+// ── Procesador de tags ────────────────────────────────────────
+async function processAgentTags(text) {
+  if (!AGENT_URL) return text;
+  let processed = text;
+
+  // list_directory
+  const listRe = /<list_directory><path>([^<]+)<\/path><\/list_directory>/g;
+  let m;
+  while ((m = listRe.exec(text)) !== null) {
+    const path = m[1];
+    const res = await agentListDir(path);
+    let out = res.success
+      ? res.items.map(function(i) { return (i.type === 'dir' ? 'D ' : 'F ') + i.name; }).join('\n')
+      : 'Error: ' + res.error;
+    processed = processed.replace(m[0], '[DIR: ' + path + ']\n' + out);
+  }
+
+  // read_file
+  const readRe = /<read_file><path>([^<]+)<\/path><\/read_file>/g;
+  while ((m = readRe.exec(text)) !== null) {
+    const path = m[1];
+    const res = await agentReadFile(path);
+    const out = res.success ? res.content : 'Error: ' + res.error;
+    processed = processed.replace(m[0], '[FILE: ' + path + ']\n' + out);
+  }
+
+  // write_file
+  const writeRe = /<write_file><path>([^<]+)<\/path><content>([\s\S]+?)<\/content><\/write_file>/g;
+  while ((m = writeRe.exec(text)) !== null) {
+    const path = m[1];
+    const content = m[2];
+    const res = await agentWriteFile(path, content);
+    const out = res.success ? 'OK guardado: ' + path : 'Error: ' + res.error;
+    processed = processed.replace(m[0], out);
+  }
+
+  // run_command
+  const cmdRe = /<run_command><cmd>([^<]+)<\/cmd>(?:<cwd>([^<]+)<\/cwd>)?<\/run_command>/g;
+  while ((m = cmdRe.exec(text)) !== null) {
+    const cmd = m[1];
+    const cwd = m[2] || null;
+    const res = await agentRunCommand(cmd, cwd);
+    let out = '';
+    if (res.success) {
+      out = (res.stdout || '') + (res.stderr || '') || 'OK sin output';
+      if (res.returncode !== 0) out += '\nExit code: ' + res.returncode;
+    } else {
+      out = 'Error: ' + res.error;
+    }
+    processed = processed.replace(m[0], '[CMD: ' + cmd + ']\n' + out);
+  }
+
+  return processed;
 }
 
 // ── Memoria ───────────────────────────────────────────────────
@@ -109,19 +199,17 @@ async function loadMemory() {
   }
 }
 
-// Extrae memoria usando texto plano — robusto, sin JSON
 async function extractMemory(messages, currentMemory) {
   const apiKey = getApiKey();
   if (!apiKey || messages.length === 0) return currentMemory;
 
-  const texto = messages.map(m => `${m.rol.toUpperCase()}: ${m.mensaje}`).join('\n');
-  const memoriaActual = `
-NOMBRE: ${currentMemory.nombre || 'desconocido'}
-PAIS: ${currentMemory.pais || 'desconocido'}
-OCUPACION: ${currentMemory.ocupacion || 'desconocido'}
-CONTEXTO: ${currentMemory.contexto || 'ninguno'}
-PROYECTOS: ${currentMemory.proyectos || 'ninguno'}
-APRENDIZAJES: ${currentMemory.aprendizajes || 'ninguno'}`.trim();
+  const texto = messages.map(function(m) { return m.rol.toUpperCase() + ': ' + m.mensaje; }).join('\n');
+  const memoriaActual = 'NOMBRE: ' + (currentMemory.nombre || 'desconocido') + '\n' +
+    'PAIS: ' + (currentMemory.pais || 'desconocido') + '\n' +
+    'OCUPACION: ' + (currentMemory.ocupacion || 'desconocido') + '\n' +
+    'CONTEXTO: ' + (currentMemory.contexto || 'ninguno') + '\n' +
+    'PROYECTOS: ' + (currentMemory.proyectos || 'ninguno') + '\n' +
+    'APRENDIZAJES: ' + (currentMemory.aprendizajes || 'ninguno');
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -134,65 +222,49 @@ APRENDIZAJES: ${currentMemory.aprendizajes || 'ninguno'}`.trim();
     body: JSON.stringify({
       model: 'claude-sonnet-4-5',
       max_tokens: 1000,
-      system: `Sos un extractor de memoria. Analizás conversaciones y actualizás un perfil estructurado.
-Devolvé ÚNICAMENTE el perfil actualizado en este formato exacto (una línea por campo, sin explicaciones):
-NOMBRE: [nombre]
-PAIS: [país]
-OCUPACION: [ocupación]
-CONTEXTO: [descripción breve del contexto de trabajo]
-PROYECTOS: [proyecto1 (estado) | proyecto2 (estado) | ...]
-APRENDIZAJES: [dato importante 1 | dato importante 2 | ...]
-RESUMEN_SESION: [resumen de 2 oraciones de esta conversación]`,
-      messages: [{
-        role: 'user',
-        content: `MEMORIA ACTUAL:\n${memoriaActual}\n\nCONVERSACIÓN:\n${texto}\n\nActualizá la memoria con la información nueva.`
-      }]
+      system: 'Sos un extractor de memoria. Analizás conversaciones y actualizás un perfil estructurado.\nDevolvé ÚNICAMENTE el perfil en este formato exacto:\nNOMBRE: [nombre]\nPAIS: [país]\nOCUPACION: [ocupación]\nCONTEXTO: [descripción breve]\nPROYECTOS: [proyecto1 (estado) | proyecto2 (estado)]\nAPRENDIZAJES: [dato1 | dato2]\nRESUMEN_SESION: [resumen de 2 oraciones]',
+      messages: [{ role: 'user', content: 'MEMORIA ACTUAL:\n' + memoriaActual + '\n\nCONVERSACIÓN:\n' + texto + '\n\nActualizá la memoria.' }]
     })
   });
 
   if (!response.ok) return currentMemory;
-
   const data = await response.json();
-  const text = data.content.map(b => b.text || '').join('').trim();
+  const text = data.content.map(function(b) { return b.text || ''; }).join('').trim();
 
-  // Parser robusto — nunca falla
-  const parsed = { ...currentMemory };
-  const lineas = text.split('\n');
-  for (const linea of lineas) {
+  const parsed = Object.assign({}, currentMemory);
+  text.split('\n').forEach(function(linea) {
     const idx = linea.indexOf(':');
-    if (idx === -1) continue;
+    if (idx === -1) return;
     const clave = linea.substring(0, idx).trim().toUpperCase();
     const valor = linea.substring(idx + 1).trim();
-    if (!valor || valor === 'desconocido' || valor === 'ninguno') continue;
-    switch(clave) {
-      case 'NOMBRE': parsed.nombre = valor; break;
-      case 'PAIS': parsed.pais = valor; break;
-      case 'OCUPACION': parsed.ocupacion = valor; break;
-      case 'CONTEXTO': parsed.contexto = valor; break;
-      case 'PROYECTOS': parsed.proyectos = valor; break;
-      case 'APRENDIZAJES': parsed.aprendizajes = valor; break;
-      case 'RESUMEN_SESION':
-        parsed.conversaciones = parsed.conversaciones || [];
-        parsed.conversaciones.unshift({ fecha: new Date().toISOString().split('T')[0], resumen: valor });
-        if (parsed.conversaciones.length > 10) parsed.conversaciones = parsed.conversaciones.slice(0, 10);
-        break;
+    if (!valor || valor === 'desconocido' || valor === 'ninguno') return;
+    if (clave === 'NOMBRE') parsed.nombre = valor;
+    else if (clave === 'PAIS') parsed.pais = valor;
+    else if (clave === 'OCUPACION') parsed.ocupacion = valor;
+    else if (clave === 'CONTEXTO') parsed.contexto = valor;
+    else if (clave === 'PROYECTOS') parsed.proyectos = valor;
+    else if (clave === 'APRENDIZAJES') parsed.aprendizajes = valor;
+    else if (clave === 'RESUMEN_SESION') {
+      parsed.conversaciones = parsed.conversaciones || [];
+      parsed.conversaciones.unshift({ fecha: new Date().toISOString().split('T')[0], resumen: valor });
+      if (parsed.conversaciones.length > 10) parsed.conversaciones = parsed.conversaciones.slice(0, 10);
     }
-  }
+  });
   return parsed;
 }
 
 function buildMemoryContext(memory) {
   if (!memory) return '';
   const partes = [];
-  if (memory.nombre) partes.push(`Nombre: ${memory.nombre}`);
-  if (memory.pais) partes.push(`País: ${memory.pais}`);
-  if (memory.ocupacion) partes.push(`Ocupación: ${memory.ocupacion}`);
-  if (memory.contexto) partes.push(`Contexto: ${memory.contexto}`);
-  if (memory.proyectos) partes.push(`Proyectos: ${memory.proyectos}`);
-  if (memory.aprendizajes) partes.push(`Aprendizajes: ${memory.aprendizajes}`);
+  if (memory.nombre) partes.push('Nombre: ' + memory.nombre);
+  if (memory.pais) partes.push('País: ' + memory.pais);
+  if (memory.ocupacion) partes.push('Ocupación: ' + memory.ocupacion);
+  if (memory.contexto) partes.push('Contexto: ' + memory.contexto);
+  if (memory.proyectos) partes.push('Proyectos: ' + memory.proyectos);
+  if (memory.aprendizajes) partes.push('Aprendizajes: ' + memory.aprendizajes);
   if (memory.conversaciones && memory.conversaciones.length > 0) {
-    const ultimas = memory.conversaciones.slice(0, 3).map(c => `- ${c.fecha}: ${c.resumen}`).join('\n');
-    partes.push(`Conversaciones recientes:\n${ultimas}`);
+    const ultimas = memory.conversaciones.slice(0, 3).map(function(c) { return '- ' + c.fecha + ': ' + c.resumen; }).join('\n');
+    partes.push('Conversaciones recientes:\n' + ultimas);
   }
   if (partes.length === 0) return '';
   return '\n\n[MEMORIA DE MATÍAS]\n' + partes.join('\n');
@@ -206,61 +278,12 @@ async function processAndSaveMemory() {
     const updated = await extractMemory(currentSessionMessages, memory);
     await sbSet('memoria_principal', updated);
     memoryCache = updated;
-    setStatus('memoria guardada ✓');
-    setTimeout(() => setStatus('lista para ayudarte'), 2000);
+    setStatus('memoria guardada');
+    setTimeout(function() { setStatus('lista para ayudarte'); }, 2000);
   } catch(e) {
     console.error('Error procesando memoria:', e);
     setStatus('lista para ayudarte');
   }
-}
-
-// ── Agente Local ─────────────────────────────────────────────
-function getAgentToken() {
-  // Hash simple del secret para el token
-  return AGENT_SECRET;
-}
-
-async function agentCall(endpoint, data = null) {
-  if (!AGENT_URL) throw new Error('Agente no configurado');
-  const url = `${AGENT_URL}${endpoint}`;
-  const opts = {
-    method: data ? 'POST' : 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${getAgentToken()}`,
-      'ngrok-skip-browser-warning': 'true'
-    }
-  };
-  if (data) opts.body = JSON.stringify(data);
-  const res = await fetch(url, opts);
-  return res.json();
-}
-
-async function agentHealth() {
-  try {
-    const res = await agentCall('/health');
-    return res.status === 'ok';
-  } catch(e) { return false; }
-}
-
-async function agentListProjects() {
-  return agentCall('/projects');
-}
-
-async function agentReadFile(path) {
-  return agentCall('/read-file', { path });
-}
-
-async function agentWriteFile(path, content) {
-  return agentCall('/write-file', { path, content });
-}
-
-async function agentRunCommand(command, cwd = null) {
-  return agentCall('/run-command', { command, cwd, timeout: 60 });
-}
-
-async function agentListDir(path) {
-  return agentCall('/list-dir', { path });
 }
 
 // ── API Anthropic ─────────────────────────────────────────────
@@ -284,96 +307,26 @@ async function callPepper(userMessage) {
     body: JSON.stringify({
       model: 'claude-sonnet-4-5',
       max_tokens: 1500,
-      system,
+      system: system,
       messages: conversationHistory
     })
   });
 
   if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.error?.message || `Error ${response.status}`);
+    const err = await response.json().catch(function() { return {}; });
+    throw new Error(err.error ? err.error.message : 'Error ' + response.status);
   }
 
   const data = await response.json();
-  let text = data.content.map(b => b.text || '').join('');
-  
-  // Procesar tags del agente si hay URL configurada
+  let text = data.content.map(function(b) { return b.text || ''; }).join('');
+
   if (AGENT_URL) {
     text = await processAgentTags(text);
   }
-  
+
   conversationHistory.push({ role: 'assistant', content: text });
   currentSessionMessages.push({ rol: 'pepper', mensaje: text });
   return text;
-}
-
-// ── Procesador de tags del agente ────────────────────────────
-async function processAgentTags(text) {
-  if (!AGENT_URL) return text;
-  
-  let processed = text;
-  let results = [];
-
-  // list_directory
-  const listMatches = [...text.matchAll(/<list_directory><path>(.*?)<\/path><\/list_directory>/g)];
-  for (const match of listMatches) {
-    const path = match[1];
-    const res = await agentListDir(path);
-    let output = '';
-    if (res.success) {
-      output = res.items.map(i => `${i.type === 'dir' ? '📁' : '📄'} ${i.name}`).join('
-');
-    } else {
-      output = `Error: ${res.error}`;
-    }
-    results.push({ tag: match[0], result: `[Contenido de ${path}]
-${output}` });
-  }
-
-  // read_file
-  const readMatches = [...text.matchAll(/<read_file><path>(.*?)<\/path><\/read_file>/g)];
-  for (const match of readMatches) {
-    const path = match[1];
-    const res = await agentReadFile(path);
-    let output = res.success ? res.content : `Error: ${res.error}`;
-    results.push({ tag: match[0], result: `[Archivo: ${path}]
-${output}` });
-  }
-
-  // write_file
-  const writeMatches = [...text.matchAll(/<write_file><path>(.*?)<\/path><content>([\s\S]*?)<\/content><\/write_file>/g)];
-  for (const match of writeMatches) {
-    const path = match[1];
-    const fileContent = match[2];
-    const res = await agentWriteFile(path, fileContent);
-    let output = res.success ? `✅ Archivo guardado: ${path}` : `Error: ${res.error}`;
-    results.push({ tag: match[0], result: output });
-  }
-
-  // run_command
-  const cmdMatches = [...text.matchAll(/<run_command><cmd>(.*?)<\/cmd>(?:<cwd>(.*?)<\/cwd>)?<\/run_command>/g)];
-  for (const match of cmdMatches) {
-    const cmd = match[1];
-    const cwd = match[2] || null;
-    const res = await agentRunCommand(cmd, cwd);
-    let output = '';
-    if (res.success) {
-      output = res.stdout || res.stderr || '✅ Comando ejecutado sin output';
-      if (res.returncode !== 0) output += `
-⚠️ Exit code: ${res.returncode}`;
-    } else {
-      output = `Error: ${res.error}`;
-    }
-    results.push({ tag: match[0], result: `[Comando: ${cmd}]
-${output}` });
-  }
-
-  // Reemplazar tags con resultados
-  for (const { tag, result } of results) {
-    processed = processed.replace(tag, result);
-  }
-
-  return processed;
 }
 
 // ── Render ────────────────────────────────────────────────────
@@ -384,19 +337,19 @@ function escapeHtml(str) {
 function renderMarkdown(text) {
   const parts = [];
   let lastIndex = 0;
-  const codeBlockRegex = /```([a-zA-Z0-9]*)\n?([\s\S]*?)```/g;
-  let match;
-  while ((match = codeBlockRegex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      let chunk = escapeHtml(text.slice(lastIndex, match.index));
+  const codeBlockRe = /```([a-zA-Z0-9]*)\n?([\s\S]*?)```/g;
+  let m;
+  while ((m = codeBlockRe.exec(text)) !== null) {
+    if (m.index > lastIndex) {
+      let chunk = escapeHtml(text.slice(lastIndex, m.index));
       chunk = chunk.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
       chunk = chunk.replace(/`([^`]+)`/g, '<code>$1</code>');
       chunk = chunk.replace(/\n/g, '<br>');
       parts.push(chunk);
     }
-    const lang = match[1] || 'plaintext';
-    parts.push(`<pre><code class="language-${lang}">${escapeHtml(match[2].trim())}</code></pre>`);
-    lastIndex = match.index + match[0].length;
+    const lang = m[1] || 'plaintext';
+    parts.push('<pre><code class="language-' + lang + '">' + escapeHtml(m[2].trim()) + '</code></pre>');
+    lastIndex = m.index + m[0].length;
   }
   if (lastIndex < text.length) {
     let chunk = escapeHtml(text.slice(lastIndex));
@@ -408,9 +361,9 @@ function renderMarkdown(text) {
   return parts.join('');
 }
 
-function addMessage(role, text, proposal = null, fileName = null) {
+function addMessage(role, text, proposal, fileName) {
   const wrap = document.createElement('div');
-  wrap.className = `msg ${role}`;
+  wrap.className = 'msg ' + role;
   const av = document.createElement('div');
   av.className = 'msg-av';
   av.textContent = role === 'pepper' ? 'P' : 'Vos';
@@ -420,8 +373,8 @@ function addMessage(role, text, proposal = null, fileName = null) {
   bubble.className = 'bubble';
   if (role === 'pepper') {
     bubble.innerHTML = renderMarkdown(text);
-    setTimeout(() => {
-      bubble.querySelectorAll('pre code').forEach(block => {
+    setTimeout(function() {
+      bubble.querySelectorAll('pre code').forEach(function(block) {
         if (window.hljs) window.hljs.highlightElement(block);
       });
     }, 0);
@@ -431,7 +384,7 @@ function addMessage(role, text, proposal = null, fileName = null) {
   if (fileName) {
     const badge = document.createElement('div');
     badge.className = 'file-badge';
-    badge.innerHTML = `<i class="ti ti-file"></i>${fileName}`;
+    badge.innerHTML = '<i class="ti ti-file"></i>' + fileName;
     bubble.appendChild(badge);
   }
   body.appendChild(bubble);
@@ -448,14 +401,14 @@ function buildProposalCard(proposal) {
   card.className = 'proposal-card';
   const title = document.createElement('div');
   title.className = 'proposal-title';
-  title.innerHTML = `<i class="ti ti-checklist"></i>${proposal.titulo}`;
+  title.innerHTML = '<i class="ti ti-checklist"></i>' + proposal.titulo;
   const steps = document.createElement('div');
   steps.className = 'proposal-steps';
-  steps.innerHTML = proposal.pasos.map((p, i) => `${i + 1}. ${p}`).join('<br>');
+  steps.innerHTML = proposal.pasos.map(function(p, i) { return (i+1) + '. ' + p; }).join('<br>');
   const risk = document.createElement('div');
   risk.className = 'proposal-risk';
   risk.style.color = riskColor;
-  risk.innerHTML = `<i class="ti ti-shield-check"></i>Riesgo: ${proposal.riesgo}`;
+  risk.innerHTML = '<i class="ti ti-shield-check"></i>Riesgo: ' + proposal.riesgo;
   const actions = document.createElement('div');
   actions.className = 'proposal-actions';
   const btnOk = document.createElement('button');
@@ -464,8 +417,8 @@ function buildProposalCard(proposal) {
   const btnNok = document.createElement('button');
   btnNok.className = 'btn-nok';
   btnNok.textContent = 'NO OK — buscar alternativa';
-  btnOk.onclick = () => handleDecision('ok', proposal.titulo, actions);
-  btnNok.onclick = () => handleDecision('nok', proposal.titulo, actions);
+  btnOk.onclick = function() { handleDecision('ok', proposal.titulo, actions); };
+  btnNok.onclick = function() { handleDecision('nok', proposal.titulo, actions); };
   actions.appendChild(btnOk);
   actions.appendChild(btnNok);
   card.appendChild(title);
@@ -481,53 +434,53 @@ function parseResponse(text) {
   let proposal = null;
   if (propMatch) {
     const raw = propMatch[1];
-    const titulo = (raw.match(/título:\s*(.+)/) || [])[1]?.trim() || 'Propuesta';
-    const pasos = (raw.match(/pasos:\s*(.+)/) || [])[1]?.trim().split('|').map(s => s.trim()).filter(Boolean) || [];
-    const riesgo = (raw.match(/riesgo:\s*(.+)/) || [])[1]?.trim() || 'bajo';
-    proposal = { titulo, pasos, riesgo };
+    const titulo = (raw.match(/título:\s*(.+)/) || [])[1] || 'Propuesta';
+    const pasosStr = (raw.match(/pasos:\s*(.+)/) || [])[1] || '';
+    const pasos = pasosStr.trim().split('|').map(function(s) { return s.trim(); }).filter(Boolean);
+    const riesgo = (raw.match(/riesgo:\s*(.+)/) || [])[1] || 'bajo';
+    proposal = { titulo: titulo.trim(), pasos: pasos, riesgo: riesgo.trim() };
   }
-  return { cleanText, proposal };
+  return { cleanText: cleanText, proposal: proposal };
 }
 
 function addTyping() {
   const wrap = document.createElement('div');
   wrap.className = 'msg pepper';
   wrap.id = 'typing-indicator';
-  wrap.innerHTML = `<div class="msg-av">P</div><div><div class="bubble typing-dots"><span></span><span></span><span></span></div></div>`;
+  wrap.innerHTML = '<div class="msg-av">P</div><div><div class="bubble typing-dots"><span></span><span></span><span></span></div></div>';
   messagesEl.appendChild(wrap);
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
-function removeTyping() { document.getElementById('typing-indicator')?.remove(); }
+function removeTyping() { const el = document.getElementById('typing-indicator'); if (el) el.remove(); }
 
 function addNoKeyNotice() {
   const wrap = document.createElement('div');
   wrap.className = 'msg pepper';
-  wrap.innerHTML = `<div class="msg-av">P</div><div><div class="notice"><i class="ti ti-key"></i><div>Para activarme necesitás configurar tu API Key de Anthropic. Hacé clic en <strong>⚙</strong> arriba a la derecha.</div></div></div>`;
+  wrap.innerHTML = '<div class="msg-av">P</div><div><div class="notice"><i class="ti ti-key"></i><div>Para activarme necesitás configurar tu API Key de Anthropic. Hacé clic en <strong>⚙</strong> arriba a la derecha.</div></div></div>';
   messagesEl.appendChild(wrap);
 }
 
 // ── Handlers ──────────────────────────────────────────────────
 async function handleDecision(decision, titulo, actionsEl) {
   actionsEl.innerHTML = decision === 'ok'
-    ? `<span style="color:#1D9E75;font-size:13px;display:flex;align-items:center;gap:5px"><i class="ti ti-check"></i>Aprobado</span>`
-    : `<span style="color:#E24B4A;font-size:13px;display:flex;align-items:center;gap:5px"><i class="ti ti-x"></i>Buscando alternativa...</span>`;
+    ? '<span style="color:#1D9E75;font-size:13px;display:flex;align-items:center;gap:5px"><i class="ti ti-check"></i>Aprobado</span>'
+    : '<span style="color:#E24B4A;font-size:13px;display:flex;align-items:center;gap:5px"><i class="ti ti-x"></i>Buscando alternativa...</span>';
 
-  // Guardar decisión en Supabase
   fetch('/api/save-decision', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ user_id: USER_ID, contexto: titulo, propuesta: titulo, respuesta: decision === 'ok' ? 'OK' : 'NO OK' })
-  }).catch(() => {});
+  }).catch(function() {});
 
-  const msg = decision === 'ok' ? `OK, adelante con: ${titulo}` : `NO OK para: ${titulo}. Buscá una alternativa.`;
+  const msg = decision === 'ok' ? 'OK, adelante con: ' + titulo : 'NO OK para: ' + titulo + '. Buscá una alternativa.';
   addMessage('user', decision === 'ok' ? 'OK — adelante' : 'NO OK — buscá otra alternativa');
   addTyping();
   try {
     const reply = await callPepper(msg);
     removeTyping();
-    const { cleanText, proposal } = parseResponse(reply);
-    addMessage('pepper', cleanText, proposal);
-    speakText(cleanText);
+    const parsed = parseResponse(reply);
+    addMessage('pepper', parsed.cleanText, parsed.proposal);
+    speakText(parsed.cleanText);
   } catch(e) {
     removeTyping();
     addMessage('pepper', handleError(e));
@@ -537,9 +490,9 @@ async function handleDecision(decision, titulo, actionsEl) {
 async function sendMessage() {
   const text = inputEl.value.trim();
   if (!text && !attachedFile) return;
-  const fileName = attachedFile?.name || null;
+  const fileName = attachedFile ? attachedFile.name : null;
   addMessage('user', text, null, fileName);
-  const messageToSend = attachedFile ? `${text}\n\n[Archivo adjunto: ${attachedFile.name}]` : text;
+  const messageToSend = attachedFile ? text + '\n\n[Archivo adjunto: ' + attachedFile.name + ']' : text;
   inputEl.value = '';
   inputEl.style.height = 'auto';
   attachedFile = null;
@@ -548,9 +501,9 @@ async function sendMessage() {
   try {
     const reply = await callPepper(messageToSend);
     removeTyping();
-    const { cleanText, proposal } = parseResponse(reply);
-    addMessage('pepper', cleanText, proposal);
-    speakText(cleanText);
+    const parsed = parseResponse(reply);
+    addMessage('pepper', parsed.cleanText, parsed.proposal);
+    speakText(parsed.cleanText);
   } catch(e) {
     removeTyping();
     addMessage('pepper', handleError(e));
@@ -559,8 +512,8 @@ async function sendMessage() {
 
 function handleError(e) {
   if (e.message === 'NO_KEY') return 'Necesitás configurar tu API Key. Hacé clic en ⚙ arriba a la derecha.';
-  if (e.message.includes('401')) return 'La API Key no es válida. Revisala en la configuración.';
-  return `Hubo un error: ${e.message}. Intentá de nuevo.`;
+  if (e.message.indexOf('401') !== -1) return 'La API Key no es válida. Revisala en la configuración.';
+  return 'Hubo un error: ' + e.message + '. Intentá de nuevo.';
 }
 
 function speakText(text) {
@@ -570,7 +523,7 @@ function speakText(text) {
   utter.lang = 'es-ES';
   utter.rate = 1.05;
   const voices = window.speechSynthesis.getVoices();
-  const spanish = voices.find(v => v.lang.startsWith('es'));
+  const spanish = voices.find(function(v) { return v.lang.startsWith('es'); });
   if (spanish) utter.voice = spanish;
   window.speechSynthesis.speak(utter);
 }
@@ -581,60 +534,58 @@ function startVoice() {
   recognition = new SR();
   recognition.lang = 'es-ES';
   recognition.interimResults = false;
-  recognition.onstart = () => { isListening = true; btnVoice.classList.add('listening'); };
-  recognition.onresult = (e) => { inputEl.value = e.results[0][0].transcript; sendMessage(); };
-  recognition.onend = () => { isListening = false; btnVoice.classList.remove('listening'); };
-  recognition.onerror = () => { isListening = false; btnVoice.classList.remove('listening'); };
+  recognition.onstart = function() { isListening = true; btnVoice.classList.add('listening'); };
+  recognition.onresult = function(e) { inputEl.value = e.results[0][0].transcript; sendMessage(); };
+  recognition.onend = function() { isListening = false; btnVoice.classList.remove('listening'); };
+  recognition.onerror = function() { isListening = false; btnVoice.classList.remove('listening'); };
   recognition.start();
 }
 
 // ── Eventos ───────────────────────────────────────────────────
 btnSend.addEventListener('click', sendMessage);
-btnVoice.addEventListener('click', () => { isListening ? recognition?.stop() : startVoice(); });
-fileInput.addEventListener('change', (e) => {
+btnVoice.addEventListener('click', function() { isListening ? recognition.stop() : startVoice(); });
+fileInput.addEventListener('change', function(e) {
   attachedFile = e.target.files[0];
-  if (attachedFile) inputEl.placeholder = `Archivo listo: ${attachedFile.name}`;
+  if (attachedFile) inputEl.placeholder = 'Archivo listo: ' + attachedFile.name;
 });
-inputEl.addEventListener('keydown', (e) => {
+inputEl.addEventListener('keydown', function(e) {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
 });
-inputEl.addEventListener('input', () => {
+inputEl.addEventListener('input', function() {
   inputEl.style.height = 'auto';
   inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';
 });
-btnSave.addEventListener('click', async () => {
-  await processAndSaveMemory();
-});
-btnClear.addEventListener('click', async () => {
+btnSave.addEventListener('click', function() { processAndSaveMemory(); });
+btnClear.addEventListener('click', async function() {
   await processAndSaveMemory();
   conversationHistory = [];
   currentSessionMessages = [];
   messagesEl.innerHTML = '';
   const memory = memoryCache || {};
   const nombre = memory.nombre || 'Matías';
-  addMessage('pepper', `Listo ${nombre}, empezamos una nueva conversación. ¿En qué te ayudo?`);
+  addMessage('pepper', 'Listo ' + nombre + ', empezamos una nueva conversación. ¿En qué te ayudo?');
 });
-btnSettings.addEventListener('click', () => modalSettings.classList.remove('hidden'));
-modalClose.addEventListener('click', () => modalSettings.classList.add('hidden'));
-modalSettings.addEventListener('click', (e) => { if (e.target === modalSettings) modalSettings.classList.add('hidden'); });
-btnSaveKey.addEventListener('click', async () => {
+btnSettings.addEventListener('click', function() { modalSettings.classList.remove('hidden'); });
+modalClose.addEventListener('click', function() { modalSettings.classList.add('hidden'); });
+modalSettings.addEventListener('click', function(e) { if (e.target === modalSettings) modalSettings.classList.add('hidden'); });
+btnSaveKey.addEventListener('click', async function() {
   const key = apiKeyInput.value.trim();
-  const agentUrl = document.getElementById('agent-url-input')?.value.trim().replace(/\/$/, '');
+  const agentInput = document.getElementById('agent-url-input');
+  const agentUrl = agentInput ? agentInput.value.trim().replace(/\/$/, '') : '';
   if (key) {
     localStorage.setItem('pepper_api_key', key);
     if (agentUrl) {
       localStorage.setItem('pepper_agent_url', agentUrl);
       AGENT_URL = agentUrl;
-      // Verificar conexión con agente
       const ok = await agentHealth();
-      setStatus(ok ? 'agente conectado ✓' : 'agente no disponible');
-      setTimeout(() => setStatus('lista para ayudarte'), 3000);
+      setStatus(ok ? 'agente conectado' : 'agente no disponible');
+      setTimeout(function() { setStatus('lista para ayudarte'); }, 3000);
     }
     modalSettings.classList.add('hidden');
     if (messagesEl.querySelector('.notice')) { messagesEl.innerHTML = ''; init(); }
   }
 });
-window.addEventListener('beforeunload', () => { processAndSaveMemory(); });
+window.addEventListener('beforeunload', function() { processAndSaveMemory(); });
 
 // ── Init ──────────────────────────────────────────────────────
 async function init() {
@@ -646,17 +597,15 @@ async function init() {
     const agentInput = document.getElementById('agent-url-input');
     if (agentInput) agentInput.value = savedAgentUrl;
     const ok = await agentHealth();
-    if (ok) setStatus('agente conectado ✓');
+    if (ok) setStatus('agente conectado');
   }
   setStatus('cargando memoria...');
   memoryCache = await loadMemory();
-  const nombre = memoryCache.nombre || '';
+  const nombre = memoryCache ? memoryCache.nombre || '' : '';
   setStatus('lista para ayudarte');
-  const saludo = nombre
-    ? `Hola ${nombre}! ¿En qué te ayudo hoy?`
-    : 'Hola! Soy PEPPER. Contame qué necesitás resolver hoy.';
+  const saludo = nombre ? 'Hola ' + nombre + '! ¿En qué te ayudo hoy?' : 'Hola! Soy PEPPER. Contame qué necesitás resolver hoy.';
   addMessage('pepper', saludo);
 }
 
-window.speechSynthesis?.getVoices();
+window.speechSynthesis && window.speechSynthesis.getVoices();
 init();
