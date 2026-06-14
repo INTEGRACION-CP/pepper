@@ -295,10 +295,85 @@ async function callPepper(userMessage) {
   }
 
   const data = await response.json();
-  const text = data.content.map(b => b.text || '').join('');
+  let text = data.content.map(b => b.text || '').join('');
+  
+  // Procesar tags del agente si hay URL configurada
+  if (AGENT_URL) {
+    text = await processAgentTags(text);
+  }
+  
   conversationHistory.push({ role: 'assistant', content: text });
   currentSessionMessages.push({ rol: 'pepper', mensaje: text });
   return text;
+}
+
+// ── Procesador de tags del agente ────────────────────────────
+async function processAgentTags(text) {
+  if (!AGENT_URL) return text;
+  
+  let processed = text;
+  let results = [];
+
+  // list_directory
+  const listMatches = [...text.matchAll(/<list_directory><path>(.*?)<\/path><\/list_directory>/g)];
+  for (const match of listMatches) {
+    const path = match[1];
+    const res = await agentListDir(path);
+    let output = '';
+    if (res.success) {
+      output = res.items.map(i => `${i.type === 'dir' ? '📁' : '📄'} ${i.name}`).join('
+');
+    } else {
+      output = `Error: ${res.error}`;
+    }
+    results.push({ tag: match[0], result: `[Contenido de ${path}]
+${output}` });
+  }
+
+  // read_file
+  const readMatches = [...text.matchAll(/<read_file><path>(.*?)<\/path><\/read_file>/g)];
+  for (const match of readMatches) {
+    const path = match[1];
+    const res = await agentReadFile(path);
+    let output = res.success ? res.content : `Error: ${res.error}`;
+    results.push({ tag: match[0], result: `[Archivo: ${path}]
+${output}` });
+  }
+
+  // write_file
+  const writeMatches = [...text.matchAll(/<write_file><path>(.*?)<\/path><content>([\s\S]*?)<\/content><\/write_file>/g)];
+  for (const match of writeMatches) {
+    const path = match[1];
+    const fileContent = match[2];
+    const res = await agentWriteFile(path, fileContent);
+    let output = res.success ? `✅ Archivo guardado: ${path}` : `Error: ${res.error}`;
+    results.push({ tag: match[0], result: output });
+  }
+
+  // run_command
+  const cmdMatches = [...text.matchAll(/<run_command><cmd>(.*?)<\/cmd>(?:<cwd>(.*?)<\/cwd>)?<\/run_command>/g)];
+  for (const match of cmdMatches) {
+    const cmd = match[1];
+    const cwd = match[2] || null;
+    const res = await agentRunCommand(cmd, cwd);
+    let output = '';
+    if (res.success) {
+      output = res.stdout || res.stderr || '✅ Comando ejecutado sin output';
+      if (res.returncode !== 0) output += `
+⚠️ Exit code: ${res.returncode}`;
+    } else {
+      output = `Error: ${res.error}`;
+    }
+    results.push({ tag: match[0], result: `[Comando: ${cmd}]
+${output}` });
+  }
+
+  // Reemplazar tags con resultados
+  for (const { tag, result } of results) {
+    processed = processed.replace(tag, result);
+  }
+
+  return processed;
 }
 
 // ── Render ────────────────────────────────────────────────────
