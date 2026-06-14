@@ -49,7 +49,7 @@ html, body { height: 100%; font-family: var(--font); background: var(--gray-50);
 .bubble strong { font-weight: 600; }
 .bubble code { background: #2d2d30; color: #ce9178; padding: 2px 6px; border-radius: 3px; font-family: 'Consolas', monospace; font-size: 13px; }
 .bubble pre { background: #1e1e1e; border-radius: 8px; padding: 16px; margin: 10px 0; overflow-x: auto; border-left: 4px solid #007acc; }
-.bubble pre code { background: transparent; color: inherit; padding: 0; font-size: 13px; }
+.bubble pre code { background: transparent; color: #d4d4d4; padding: 0; font-size: 13px; }
 
 /* Proposal card */
 .proposal-card { background: white; border: 0.5px solid var(--gray-300); border-radius: 12px; padding: 14px 16px; margin-top: 8px; font-size: 13px; }
