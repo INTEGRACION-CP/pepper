@@ -68,31 +68,25 @@ async function sbGet(clave) {
 
 async function sbSet(clave, valor) {
   try {
-    // Intentar actualizar primero
-    const patch = await fetch(`${SUPABASE_URL}/rest/v1/memoria?clave=eq.${clave}`, {
-      method: 'PATCH',
+    // Borrar si existe
+    await fetch(`${SUPABASE_URL}/rest/v1/memoria?clave=eq.${encodeURIComponent(clave)}`, {
+      method: 'DELETE',
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`
+      }
+    });
+    // Insertar nuevo
+    await fetch(`${SUPABASE_URL}/rest/v1/memoria`, {
+      method: 'POST',
       headers: {
         'apikey': SUPABASE_KEY,
         'Authorization': `Bearer ${SUPABASE_KEY}`,
         'Content-Type': 'application/json',
         'Prefer': 'return=minimal'
       },
-      body: JSON.stringify({ valor, actualizado_at: new Date().toISOString() })
+      body: JSON.stringify({ clave, valor, actualizado_at: new Date().toISOString() })
     });
-    // Si no existía, insertar
-    const range = patch.headers.get('content-range');
-    if (range === '*/0' || patch.status === 404) {
-      await fetch(`${SUPABASE_URL}/rest/v1/memoria`, {
-        method: 'POST',
-        headers: {
-          'apikey': SUPABASE_KEY,
-          'Authorization': `Bearer ${SUPABASE_KEY}`,
-          'Content-Type': 'application/json',
-          'Prefer': 'return=minimal'
-        },
-        body: JSON.stringify({ clave, valor, actualizado_at: new Date().toISOString() })
-      });
-    }
   } catch(e) { console.error('Error sbSet:', e); }
 }
 
